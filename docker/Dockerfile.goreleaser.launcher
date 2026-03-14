@@ -1,0 +1,50 @@
+# PicoClaw Launcher - Docker Image with Web UI
+# Used by GoReleaser for release builds
+# Supports: linux/amd64, linux/arm64, linux/riscv64
+
+FROM alpine:3.21
+
+# Install runtime dependencies
+RUN apk add --no-cache \
+    ca-certificates \
+    tzdata \
+    wget
+
+# Create non-root user
+RUN adduser -D -s /bin/sh picoclaw
+
+# Copy binaries from goreleaser build context
+COPY picoclaw /usr/local/bin/picoclaw
+COPY picoclaw-launcher /usr/local/bin/picoclaw-launcher
+COPY picoclaw-launcher-tui /usr/local/bin/picoclaw-launcher-tui
+
+# Copy entrypoint script
+COPY docker/entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+# Create data and config directories
+RUN mkdir -p /data /config && \
+    chown -R picoclaw:picoclaw /data /config
+
+# Switch to non-root user
+USER picoclaw
+
+# Expose volumes for persistence
+VOLUME ["/data", "/config"]
+WORKDIR /data
+
+# Expose ports
+# 8080 - Gateway API
+# 3000 - Launcher Web UI
+EXPOSE 8080 3000
+
+# Health check (launcher mode)
+HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
+    CMD wget -q --spider http://localhost:3000/api/health 2>/dev/null || \
+        wget -q --spider http://localhost:8080/health 2>/dev/null || exit 1
+
+# Entrypoint handles initialization
+ENTRYPOINT ["/entrypoint.sh"]
+
+# Default command: run launcher
+CMD ["picoclaw-launcher"]

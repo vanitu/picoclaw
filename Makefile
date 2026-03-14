@@ -254,43 +254,58 @@ check: deps fmt vet test
 run: build
 	@$(BUILD_DIR)/$(BINARY_NAME) $(ARGS)
 
-## docker-build: Build Docker image (minimal Alpine-based)
+## docker-build: Build Docker image from source (development)
 docker-build:
-	@echo "Building minimal Docker image (Alpine-based)..."
-	docker compose -f docker/docker-compose.yml build picoclaw-agent picoclaw-gateway
+	@echo "Building Docker image from source..."
+	docker build -f docker/Dockerfile.dev -t picoclaw:dev .
 
-## docker-build-full: Build Docker image with full MCP support (Node.js 24)
-docker-build-full:
-	@echo "Building full-featured Docker image (Node.js 24)..."
-	docker compose -f docker/docker-compose.full.yml build picoclaw-agent picoclaw-gateway
+## docker-build-goreleaser: Build Docker image using goreleaser style (requires pre-built binary)
+docker-build-goreleaser: build
+	@echo "Building Docker image with goreleaser style..."
+	@mkdir -p docker/tmp
+	@cp $(BUILD_DIR)/$(BINARY_NAME) docker/tmp/
+	@cp docker/entrypoint.sh docker/tmp/
+	@docker build -f docker/Dockerfile.goreleaser -t picoclaw:latest docker/tmp
+	@rm -rf docker/tmp
 
-## docker-test: Test MCP tools in Docker container
-docker-test:
-	@echo "Testing MCP tools in Docker..."
-	@chmod +x scripts/test-docker-mcp.sh
-	@./scripts/test-docker-mcp.sh
-
-## docker-run: Run picoclaw gateway in Docker (Alpine-based)
+## docker-run: Run picoclaw gateway in Docker (development image)
 docker-run:
-	docker compose -f docker/docker-compose.yml --profile gateway up
+	docker run --rm -it \
+		-p 8080:8080 \
+		-v $(PWD)/docker/config:/config \
+		-v picoclaw-data:/data \
+		-e LOG_LEVEL=info \
+		picoclaw:dev picoclaw gateway
 
-## docker-run-full: Run picoclaw gateway in Docker (full-featured)
-docker-run-full:
-	docker compose -f docker/docker-compose.full.yml --profile gateway up
-
-## docker-run-agent: Run picoclaw agent in Docker (interactive, Alpine-based)
+## docker-run-agent: Run picoclaw agent in Docker (interactive, development)
 docker-run-agent:
-	docker compose -f docker/docker-compose.yml run --rm picoclaw-agent
+	docker run --rm -it \
+		-v $(PWD)/docker/config:/config \
+		-v picoclaw-data:/data \
+		-e LOG_LEVEL=info \
+		picoclaw:dev picoclaw agent
 
-## docker-run-agent-full: Run picoclaw agent in Docker (interactive, full-featured)
-docker-run-agent-full:
-	docker compose -f docker/docker-compose.full.yml run --rm picoclaw-agent
+## docker-compose-up: Run full stack with docker-compose
+docker-compose-up:
+	cd docker && docker compose up -d
+
+## docker-compose-down: Stop docker-compose stack
+docker-compose-down:
+	cd docker && docker compose down -v
+
+## docker-compose-full-up: Run full stack with all services
+docker-compose-full-up:
+	cd docker && docker compose -f docker-compose.full.yml up -d
+
+## docker-compose-full-launcher: Run with launcher UI
+docker-compose-full-launcher:
+	cd docker && docker compose -f docker-compose.full.yml --profile launcher up -d
 
 ## docker-clean: Clean Docker images and volumes
 docker-clean:
-	docker compose -f docker/docker-compose.yml down -v
-	docker compose -f docker/docker-compose.full.yml down -v
-	docker rmi picoclaw:latest picoclaw:full 2>/dev/null || true
+	cd docker && docker compose down -v 2>/dev/null || true
+	cd docker && docker compose -f docker-compose.full.yml down -v 2>/dev/null || true
+	docker rmi picoclaw:dev picoclaw:latest 2>/dev/null || true
 
 ## help: Show this help message
 help:

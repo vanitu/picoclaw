@@ -1,0 +1,95 @@
+# PicoClaw - Docker Compose (Full Setup)
+# Complete setup with gateway, agent, and optional launcher
+#
+# Usage:
+#   cd docker && docker compose -f docker-compose.full.yml up
+#   # With launcher UI:
+#   cd docker && docker compose -f docker-compose.full.yml --profile launcher up
+
+services:
+  # Main gateway service
+  picoclaw-gateway:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.dev
+    image: picoclaw:dev
+    container_name: picoclaw-gateway
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./config:/config
+      - picoclaw-data:/data
+    environment:
+      - PICOCLAW_CONFIG=/config/config.json
+      - PICOCLAW_HOME=/data
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+    command: ["picoclaw", "gateway"]
+    networks:
+      - picoclaw
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # Agent worker service
+  picoclaw-agent:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.dev
+    image: picoclaw:dev
+    container_name: picoclaw-agent
+    restart: unless-stopped
+    volumes:
+      - ./config:/config
+      - picoclaw-data:/data
+    environment:
+      - PICOCLAW_CONFIG=/config/config.json
+      - PICOCLAW_HOME=/data
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+    command: ["picoclaw", "agent"]
+    networks:
+      - picoclaw
+    depends_on:
+      picoclaw-gateway:
+        condition: service_healthy
+    # Agent doesn't expose ports but needs to communicate with gateway
+
+  # Launcher with Web UI (optional profile)
+  picoclaw-launcher:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.dev
+    image: picoclaw:dev
+    container_name: picoclaw-launcher
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./config:/config
+      - picoclaw-data:/data
+    environment:
+      - PICOCLAW_CONFIG=/config/config.json
+      - PICOCLAW_HOME=/data
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+    command: ["picoclaw-launcher"]
+    networks:
+      - picoclaw
+    profiles:
+      - launcher
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+networks:
+  picoclaw:
+    driver: bridge
+
+volumes:
+  picoclaw-data:
+    driver: local
