@@ -11,8 +11,10 @@ import (
 	"github.com/gorilla/websocket"
 
 	"github.com/sipeed/picoclaw/pkg/bus"
+	"github.com/sipeed/picoclaw/pkg/channels"
 	"github.com/sipeed/picoclaw/pkg/identity"
 	"github.com/sipeed/picoclaw/pkg/logger"
+	"github.com/sipeed/picoclaw/pkg/media"
 )
 
 // handleWebSocket upgrades HTTP to WebSocket and manages the connection.
@@ -211,28 +213,57 @@ func (c *KrabotChannel) handleMessageSend(kc *krabotConn, msg KrabotMessage) {
 		return
 	}
 
-	// Process media URLs if present
-	var mediaPaths []string
-	for _, media := range msg.Payload.Media {
-		// Validate media URL
-		if media.URL == "" {
-			continue
-		}
-		// Validate MIME type if whitelist configured
-		if !c.config.IsAllowedType(media.ContentType) {
-			logger.WarnCF("krabot", "Rejected media type", map[string]any{
-				"type": media.ContentType,
-			})
-			continue
-		}
-		// Store URL reference for AI processing
-		// The AI will download from the signed URL
-		mediaPaths = append(mediaPaths, media.URL)
-	}
-
 	sessionID := kc.sessionID
 	chatID := "krabot:" + sessionID
 	senderID := "krabot-user"
+	scope := channels.BuildMediaScope("krabot", chatID, msg.ID)
+
+	// Process media URLs: download and store locally (like Telegram)
+	var mediaPaths []string
+	store := c.GetMediaStore()
+
+	for _, mediaItem := range msg.Payload.Media {
+		// Validate media URL
+		if mediaItem.URL == "" {
+			continue
+		}
+		// Validate MIME type if whitelist configured
+		if !c.config.IsAllowedType(mediaItem.ContentType) {
+			logger.WarnCF("krabot", "Rejected media type", map[string]any{
+				"type": mediaItem.ContentType,
+			})
+			continue
+		}
+
+		// Download file from signed URL
+		localPath, err := DownloadFromURL(mediaItem.URL, c.config.GetMaxFileSize())
+		if err != nil {
+			logger.ErrorCF("krabot", "Failed to download media", map[string]any{
+				"url":   mediaItem.URL[:50] + "...",
+				"error": err.Error(),
+			})
+			kc.writeJSON(newError("download_failed", "failed to download media file"))
+			continue
+		}
+
+		// Store in MediaStore (same as Telegram)
+		if store != nil {
+			ref, err := store.Store(localPath, media.MediaMeta{
+				Filename:    mediaItem.Filename,
+				ContentType: mediaItem.ContentType,
+				Source:      "krabot",
+			}, scope)
+			if err == nil {
+				mediaPaths = append(mediaPaths, ref)
+				continue
+			}
+			logger.WarnCF("krabot", "Failed to store media, using temp path", map[string]any{
+				"error": err.Error(),
+			})
+		}
+		// Fallback: use local path directly
+		mediaPaths = append(mediaPaths, localPath)
+	}
 
 	peer := bus.Peer{Kind: "direct", ID: chatID}
 
@@ -258,7 +289,7 @@ func (c *KrabotChannel) handleMessageSend(kc *krabotConn, msg KrabotMessage) {
 		return
 	}
 
-	// Pass to AI for processing
+	// Pass to AI for processing (media:// refs like Telegram)
 	c.HandleMessage(c.ctx, peer, msg.ID, senderID, chatID, content, mediaPaths, metadata, sender)
 }
 
@@ -270,32 +301,62 @@ func (c *KrabotChannel) handleMediaSend(kc *krabotConn, msg KrabotMessage) {
 		return
 	}
 
-	// Process media URLs
+	sessionID := kc.sessionID
+	chatID := "krabot:" + sessionID
+	senderID := "krabot-user"
+	scope := channels.BuildMediaScope("krabot", chatID, msg.ID)
+
+	// Process media URLs: download and store locally (like Telegram)
 	var mediaPaths []string
-	for _, media := range msg.Payload.Media {
+	store := c.GetMediaStore()
+
+	for _, mediaItem := range msg.Payload.Media {
 		// Validate media URL
-		if media.URL == "" {
+		if mediaItem.URL == "" {
 			continue
 		}
 		// Validate MIME type if whitelist configured
-		if !c.config.IsAllowedType(media.ContentType) {
+		if !c.config.IsAllowedType(mediaItem.ContentType) {
 			logger.WarnCF("krabot", "Rejected media type", map[string]any{
-				"type": media.ContentType,
+				"type": mediaItem.ContentType,
 			})
 			continue
 		}
-		// Store URL reference for AI processing
-		mediaPaths = append(mediaPaths, media.URL)
+
+		// Download file from signed URL
+		localPath, err := DownloadFromURL(mediaItem.URL, c.config.GetMaxFileSize())
+		if err != nil {
+			logger.ErrorCF("krabot", "Failed to download media", map[string]any{
+				"url":   mediaItem.URL[:50] + "...",
+				"error": err.Error(),
+			})
+			kc.writeJSON(newError("download_failed", "failed to download media file"))
+			continue
+		}
+
+		// Store in MediaStore (same as Telegram)
+		if store != nil {
+			ref, err := store.Store(localPath, media.MediaMeta{
+				Filename:    mediaItem.Filename,
+				ContentType: mediaItem.ContentType,
+				Source:      "krabot",
+			}, scope)
+			if err == nil {
+				mediaPaths = append(mediaPaths, ref)
+				continue
+			}
+			logger.WarnCF("krabot", "Failed to store media, using temp path", map[string]any{
+				"error": err.Error(),
+			})
+		}
+		// Fallback: use local path directly
+		mediaPaths = append(mediaPaths, localPath)
 	}
 
 	if len(mediaPaths) == 0 {
 		kc.writeJSON(newError("invalid_media", "no valid media URLs provided"))
 		return
 	}
-
-	sessionID := kc.sessionID
-	chatID := "krabot:" + sessionID
-	senderID := "krabot-user"
 
 	peer := bus.Peer{Kind: "direct", ID: chatID}
 
@@ -320,7 +381,7 @@ func (c *KrabotChannel) handleMediaSend(kc *krabotConn, msg KrabotMessage) {
 		return
 	}
 
-	// Pass to AI for processing (empty content, media-only)
+	// Pass to AI for processing (media:// refs like Telegram)
 	c.HandleMessage(c.ctx, peer, msg.ID, senderID, chatID, "", mediaPaths, metadata, sender)
 }
 

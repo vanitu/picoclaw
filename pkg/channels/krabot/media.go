@@ -263,6 +263,54 @@ func MediaPartFromUpload(result *UploadResult, mediaType, filename, contentType 
 	}
 }
 
+// DownloadFromURL downloads a file from a URL and saves it to a temp file.
+// Returns the local file path. The caller is responsible for cleaning up the file.
+func DownloadFromURL(fileURL string, maxSize int64) (string, error) {
+	client := &http.Client{Timeout: 30 * time.Second}
+
+	resp, err := client.Get(fileURL)
+	if err != nil {
+		return "", fmt.Errorf("download file: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("download file: status %d", resp.StatusCode)
+	}
+
+	// Check content length if available
+	if resp.ContentLength > 0 && resp.ContentLength > maxSize {
+		return "", fmt.Errorf("file too large: %d bytes (max %d)", resp.ContentLength, maxSize)
+	}
+
+	// Create temp file
+	ext := filepath.Ext(resp.Request.URL.Path)
+	if ext == "" {
+		ext = ".bin"
+	}
+
+	tempFile, err := os.CreateTemp(os.TempDir(), "krabot-download-*"+ext)
+	if err != nil {
+		return "", fmt.Errorf("create temp file: %w", err)
+	}
+	defer tempFile.Close()
+
+	// Copy with size limit
+	limitedReader := io.LimitReader(resp.Body, maxSize+1)
+	n, err := io.Copy(tempFile, limitedReader)
+	if err != nil {
+		os.Remove(tempFile.Name())
+		return "", fmt.Errorf("write file: %w", err)
+	}
+
+	if n > maxSize {
+		os.Remove(tempFile.Name())
+		return "", fmt.Errorf("file too large: exceeds %d bytes", maxSize)
+	}
+
+	return tempFile.Name(), nil
+}
+
 // SendMediaWithActiveStorage uploads AI-generated media to ActiveStorage and sends to client.
 func (c *KrabotChannel) SendMediaWithActiveStorage(ctx context.Context, chatID string, localPath string, mediaType string) error {
 	if c.config.ActiveStorage.BaseURL == "" {
