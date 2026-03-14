@@ -522,6 +522,13 @@ type A2AConfig struct {
 		} `json:"skills,omitempty"`
 	} `json:"agent_card,omitempty"`
 
+		// ActiveStorage configuration for file handling (optional)
+		ActiveStorage struct {
+			BaseURL       string `json:"base_url"        env:"PICOCLAW_CHANNELS_A2A_AS_BASE_URL"`
+			APIKey        string `json:"api_key"         env:"PICOCLAW_CHANNELS_A2A_AS_API_KEY"`
+			DefaultExpiry int    `json:"default_expiry"  env:"PICOCLAW_CHANNELS_A2A_AS_EXPIRY"`
+		} `json:"active_storage,omitempty"`
+
 	// Task management
 	MaxTasks          int `json:"max_tasks,omitempty"`           // Maximum concurrent tasks
 	TaskTimeout       int `json:"task_timeout,omitempty"`        // Task timeout in minutes

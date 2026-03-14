@@ -24,6 +24,7 @@ var _ channels.Channel = (*A2AChannel)(nil)
 type A2AChannel struct {
 	*channels.BaseChannel
 	config A2AConfig
+	bus    *bus.MessageBus
 
 	// HTTP server
 	mux    *http.ServeMux
@@ -66,6 +67,7 @@ func NewA2AChannel(cfg A2AConfig, messageBus *bus.MessageBus) (*A2AChannel, erro
 	return &A2AChannel{
 		BaseChannel: base,
 		config:      cfg,
+		bus:         messageBus,
 		mux:         http.NewServeMux(),
 		tasks:       make(map[string]*Task),
 		sessions:    make(map[string]*a2aSession),
@@ -375,4 +377,74 @@ func (c *A2AChannel) notifySubscribers(taskID string, resp *StreamResponse) {
 			// Channel full, skip
 		}
 	}
+}
+
+// convertMediaParts converts bus MediaParts to A2A Parts, uploading to ActiveStorage.
+func (c *A2AChannel) convertMediaParts(mediaParts []bus.MediaPart, converter *Converter) []Part {
+	var parts []Part
+
+	for _, mp := range mediaParts {
+		// Resolve media ref to local path
+		store := c.GetMediaStore()
+		if store == nil {
+			continue
+		}
+
+		localPath, err := store.Resolve(mp.Ref)
+		if err != nil {
+			logger.ErrorCF("a2a", "Failed to resolve media", map[string]any{
+				"ref":   mp.Ref,
+				"error": err.Error(),
+			})
+			continue
+		}
+
+		// Upload to ActiveStorage
+		client := NewActiveStorageClient(c.config.ActiveStorage)
+		ctx, cancel := context.WithTimeout(c.ctx, 30*time.Second)
+
+		filename := mp.Filename
+		if filename == "" {
+			filename = "file"
+		}
+		contentType := mp.ContentType
+		if contentType == "" {
+			contentType = "application/octet-stream"
+		}
+
+		result, err := client.UploadFile(ctx, localPath, filename, contentType)
+		cancel()
+
+		if err != nil {
+			logger.ErrorCF("a2a", "Failed to upload to ActiveStorage", map[string]any{
+				"ref":   mp.Ref,
+				"error": err.Error(),
+			})
+			continue
+		}
+
+		// Get signed URL
+		ctx, cancel = context.WithTimeout(c.ctx, 10*time.Second)
+		signedURL, err := client.GetSignedURL(ctx, result.SignedID, c.config.ActiveStorage.GetDefaultExpiry())
+		cancel()
+
+		if err != nil {
+			logger.ErrorCF("a2a", "Failed to get signed URL", map[string]any{
+				"blob_id": result.SignedID,
+				"error":   err.Error(),
+			})
+			continue
+		}
+
+		parts = append(parts, Part{
+			Type: PartTypeFile,
+			File: &FilePart{
+				Name:     filename,
+				MimeType: contentType,
+				URI:      signedURL,
+			},
+		})
+	}
+
+	return parts
 }

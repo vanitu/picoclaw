@@ -1,8 +1,11 @@
 package a2a
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/sipeed/picoclaw/pkg/logger"
 )
@@ -137,25 +140,164 @@ func (c *A2AChannel) limitTaskHistory(task *Task, limit int) *Task {
 	return task
 }
 
-// processTask processes a task through the AI
+// processTask processes a task through the AI via MessageBus.
 func (c *A2AChannel) processTask(task *Task) {
 	logger.InfoCF("a2a", "Processing task", map[string]any{
 		"task_id": task.ID,
 	})
 
-	// This is where the task would be processed through the AI
-	// For now, this is a placeholder that would be integrated with:
-	// - The agent loop
-	// - The message bus
-	// - The LLM provider
+	// Update status to working and notify subscribers
+	task.UpdateStatus(TaskStateWorking, nil)
+	c.notifySubscribers(task.ID, &StreamResponse{
+		StatusUpdate: &TaskStatusUpdateEvent{
+			ID:     task.ID,
+			Status: task.Status,
+		},
+	})
 
-	// Example flow:
-	// 1. Convert task history to format for LLM
-	// 2. Send to LLM
-	// 3. Stream updates via notifySubscribers
-	// 4. Create artifacts for outputs
-	// 5. Update status to completed/failed
+	// Get the last user message
+	if len(task.History) == 0 {
+		task.UpdateStatus(TaskStateFailed, &Message{
+			Role: "agent",
+			Parts: []Part{{
+				Type: PartTypeText,
+				Text: "No messages in task history",
+			}},
+		})
+		return
+	}
 
-	// Placeholder: simulate completion
-	// In real implementation, this would be async processing
+	lastMsg := task.History[len(task.History)-1]
+
+	// Convert A2A message to inbound message
+	converter := NewConverter(c)
+	inbound, err := converter.PartsToInbound(task.ID, task.SessionID, lastMsg.Parts)
+	if err != nil {
+		logger.ErrorCF("a2a", "Failed to convert message", map[string]any{
+			"task_id": task.ID,
+			"error":   err.Error(),
+		})
+		task.UpdateStatus(TaskStateFailed, &Message{
+			Role: "agent",
+			Parts: []Part{{
+				Type: PartTypeText,
+				Text: fmt.Sprintf("Message conversion failed: %v", err),
+			}},
+		})
+		return
+	}
+
+	// Create timeout context
+	ctx, cancel := context.WithTimeout(c.ctx, time.Duration(c.config.GetTaskTimeout())*time.Minute)
+	defer cancel()
+
+	// Start response handler in background
+	go c.handleTaskResponse(ctx, task, converter)
+
+	// Publish to MessageBus
+	if err := c.bus.PublishInbound(ctx, *inbound); err != nil {
+		logger.ErrorCF("a2a", "Failed to publish message", map[string]any{
+			"task_id": task.ID,
+			"error":   err.Error(),
+		})
+		task.UpdateStatus(TaskStateFailed, &Message{
+			Role: "agent",
+			Parts: []Part{{
+				Type: PartTypeText,
+				Text: fmt.Sprintf("Failed to send message: %v", err),
+			}},
+		})
+	}
+}
+
+// handleTaskResponse handles the AI response for a task.
+func (c *A2AChannel) handleTaskResponse(ctx context.Context, task *Task, converter *Converter) {
+	// Subscribe to outbound messages
+	for {
+		select {
+		case <-ctx.Done():
+			// Timeout or cancellation
+			if ctx.Err() == context.DeadlineExceeded {
+				task.UpdateStatus(TaskStateFailed, &Message{
+					Role: "agent",
+					Parts: []Part{{
+						Type: PartTypeText,
+						Text: "Task timeout",
+					}},
+				})
+				c.notifySubscribers(task.ID, &StreamResponse{
+					StatusUpdate: &TaskStatusUpdateEvent{
+						ID:     task.ID,
+						Status: task.Status,
+						Final:  true,
+					},
+				})
+			}
+			return
+
+		default:
+			// Try to get outbound message
+			outbound, ok := c.bus.SubscribeOutbound(ctx)
+			if !ok {
+				continue
+			}
+
+			// Check if this message is for our task
+			expectedChatID := fmt.Sprintf("a2a:%s", task.ID)
+			if outbound.ChatID != expectedChatID {
+				continue
+			}
+
+			// Build artifact parts
+			var parts []Part
+
+			// Add text content
+			if outbound.Content != "" {
+				parts = append(parts, Part{
+					Type: PartTypeText,
+					Text: outbound.Content,
+				})
+			}
+
+			// Handle text response
+			if outbound.Content != "" {
+				parts = append(parts, Part{
+					Type: PartTypeText,
+					Text: outbound.Content,
+				})
+			}
+
+			// Add artifact with text parts
+			if len(parts) > 0 {
+				task.AddArtifact("response", parts)
+			}
+
+			// Check for media attachments (files)
+			if c.config.ActiveStorage.IsConfigured() {
+				mediaMsg, ok := c.bus.SubscribeOutboundMedia(ctx)
+				if ok && mediaMsg.ChatID == expectedChatID && len(mediaMsg.Parts) > 0 {
+					// Convert media parts to file parts and upload
+					mediaParts := c.convertMediaParts(mediaMsg.Parts, converter)
+					if len(mediaParts) > 0 {
+						task.AddArtifact("media", mediaParts)
+					}
+				}
+			}
+
+			// Mark task as completed
+			task.UpdateStatus(TaskStateCompleted, nil)
+
+			// Notify subscribers
+			c.notifySubscribers(task.ID, &StreamResponse{
+				Task: task,
+				StatusUpdate: &TaskStatusUpdateEvent{
+					ID:     task.ID,
+					Status: task.Status,
+					Final:  true,
+				},
+			})
+
+			return
+		}
+	}
 }

@@ -11,13 +11,36 @@ type A2AConfig struct {
 	// Agent Card configuration
 	AgentCard AgentCardConfig `json:"agent_card,omitempty"`
 
+	// ActiveStorage configuration for file handling (optional)
+	ActiveStorage ActiveStorageConfig `json:"active_storage,omitempty"`
+
 	// Task management
-	MaxTasks          int `json:"max_tasks,omitempty"`           // Maximum concurrent tasks
-	TaskTimeout       int `json:"task_timeout,omitempty"`        // Task timeout in minutes
+	MaxTasks          int `json:"max_tasks,omitempty"`            // Maximum concurrent tasks
+	TaskTimeout       int `json:"task_timeout,omitempty"`         // Task timeout in minutes
 	MaxTasksPerClient int `json:"max_tasks_per_client,omitempty"` // Max tasks per client
 
 	// WebSocket streaming
 	EnableStreaming bool `json:"enable_streaming,omitempty"`
+}
+
+// ActiveStorageConfig configures Rails ActiveStorage integration for file handling.
+type ActiveStorageConfig struct {
+	BaseURL       string `json:"base_url"`       // Rails app base URL
+	APIKey        string `json:"api_key"`        // API key for authentication
+	DefaultExpiry int    `json:"default_expiry"` // Default signed URL expiry in seconds
+}
+
+// GetDefaultExpiry returns the default expiry with fallback.
+func (c ActiveStorageConfig) GetDefaultExpiry() int {
+	if c.DefaultExpiry <= 0 {
+		return 3600 // 1 hour default
+	}
+	return c.DefaultExpiry
+}
+
+// IsConfigured returns true if ActiveStorage is configured.
+func (c ActiveStorageConfig) IsConfigured() bool {
+	return c.BaseURL != "" && c.APIKey != ""
 }
 
 // AgentCardConfig configures the static Agent Card

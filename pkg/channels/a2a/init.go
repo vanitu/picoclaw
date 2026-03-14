@@ -18,6 +18,11 @@ func init() {
 			EnableStreaming:   cfg.Channels.A2A.EnableStreaming,
 		}
 
+		// Copy ActiveStorage config
+		a2aCfg.ActiveStorage.BaseURL = cfg.Channels.A2A.ActiveStorage.BaseURL
+		a2aCfg.ActiveStorage.APIKey = cfg.Channels.A2A.ActiveStorage.APIKey
+		a2aCfg.ActiveStorage.DefaultExpiry = cfg.Channels.A2A.ActiveStorage.DefaultExpiry
+
 		// Copy AgentCard config
 		a2aCfg.AgentCard.Name = cfg.Channels.A2A.AgentCard.Name
 		a2aCfg.AgentCard.Description = cfg.Channels.A2A.AgentCard.Description
