@@ -204,6 +204,8 @@ type ChannelsConfig struct {
 	WeCom    WeComConfig    `json:"wecom"`
 	WeComApp WeComAppConfig `json:"wecom_app"`
 	Pico     PicoConfig     `json:"pico"`
+	Krabot   KrabotConfig   `json:"krabot"`
+	A2A      A2AConfig      `json:"a2a"`
 }
 
 // GroupTriggerConfig controls when the bot responds in group chats.
@@ -370,6 +372,64 @@ type PicoConfig struct {
 	MaxConnections  int                 `json:"max_connections,omitempty"`
 	AllowFrom       FlexibleStringSlice `json:"allow_from"                  env:"PICOCLAW_CHANNELS_PICO_ALLOW_FROM"`
 	Placeholder     PlaceholderConfig   `json:"placeholder,omitempty"`
+}
+
+// KrabotConfig configures the Krabot WebSocket chat channel.
+type KrabotConfig struct {
+	Enabled        bool                `json:"enabled"                     env:"PICOCLAW_CHANNELS_KRABOT_ENABLED"`
+	Token          string              `json:"token"                       env:"PICOCLAW_CHANNELS_KRABOT_TOKEN"`
+	AllowOrigins   []string            `json:"allow_origins,omitempty"`
+	MaxConnections int                 `json:"max_connections,omitempty"`
+	AllowFrom      FlexibleStringSlice `json:"allow_from"                  env:"PICOCLAW_CHANNELS_KRABOT_ALLOW_FROM"`
+
+	// ActiveStorage configuration for AI-generated files
+	ActiveStorage struct {
+		BaseURL       string `json:"base_url"        env:"PICOCLAW_CHANNELS_KRABOT_AS_BASE_URL"`
+		APIKey        string `json:"api_key"         env:"PICOCLAW_CHANNELS_KRABOT_AS_API_KEY"`
+		DefaultExpiry int    `json:"default_expiry"  env:"PICOCLAW_CHANNELS_KRABOT_AS_EXPIRY"`
+	} `json:"active_storage,omitempty"`
+
+	// Limits
+	MaxFileSize  int64    `json:"max_file_size,omitempty"  env:"PICOCLAW_CHANNELS_KRABOT_MAX_FILE_SIZE"`
+	AllowedTypes []string `json:"allowed_types,omitempty"`
+}
+
+// A2AConfig configures the A2A (Agent-to-Agent) protocol channel.
+type A2AConfig struct {
+	Enabled    bool `json:"enabled" env:"PICOCLAW_CHANNELS_A2A_ENABLED"`
+	Port       int  `json:"port"    env:"PICOCLAW_CHANNELS_A2A_PORT"`
+
+	// Authentication
+	Token string `json:"token" env:"PICOCLAW_CHANNELS_A2A_TOKEN"`
+
+	// Agent Card configuration
+	AgentCard struct {
+		Name        string   `json:"name"`
+		Description string   `json:"description"`
+		Version     string   `json:"version"`
+		Capabilities struct {
+			Streaming            bool `json:"streaming"`
+			PushNotifications    bool `json:"pushNotifications"`
+			StateTransitionHistory bool `json:"stateTransitionHistory"`
+		} `json:"capabilities"`
+		DefaultInputModes  []string `json:"defaultInputModes"`
+		DefaultOutputModes []string `json:"defaultOutputModes"`
+		Skills             []struct {
+			ID          string   `json:"id"`
+			Name        string   `json:"name"`
+			Description string   `json:"description,omitempty"`
+			Tags        []string `json:"tags,omitempty"`
+			Examples    []string `json:"examples,omitempty"`
+		} `json:"skills,omitempty"`
+	} `json:"agent_card,omitempty"`
+
+	// Task management
+	MaxTasks          int `json:"max_tasks,omitempty"`           // Maximum concurrent tasks
+	TaskTimeout       int `json:"task_timeout,omitempty"`        // Task timeout in minutes
+	MaxTasksPerClient int `json:"max_tasks_per_client,omitempty"` // Max tasks per client
+
+	// WebSocket streaming
+	EnableStreaming bool `json:"enable_streaming,omitempty"`
 }
 
 type HeartbeatConfig struct {
