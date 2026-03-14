@@ -64,12 +64,18 @@ USER picoclaw
 VOLUME ["/data", "/config"]
 WORKDIR /data
 
-# Default gateway port
-EXPOSE 8080
+# Gateway port - all webhook channels (Krabot, A2A, LINE, WeCom, etc.) 
+# share this single port, routed by path:
+#   /krabot/*    - Krabot WebSocket channel
+#   /a2a/*       - A2A protocol endpoints
+#   /.well-known/agent.json - A2A agent discovery
+#   /health      - Health endpoint
+# Default is 18790, but expose common alternatives
+EXPOSE 18790 8080
 
-# Health check
+# Health check (adjust port if you change gateway.port in config)
 HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
-    CMD wget -q --spider http://localhost:8080/health 2>/dev/null || exit 1
+    CMD wget -q --spider http://localhost:18790/health 2>/dev/null || wget -q --spider http://localhost:8080/health 2>/dev/null || exit 1
 
 # Entrypoint handles initialization
 ENTRYPOINT ["/entrypoint.sh"]

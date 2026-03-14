@@ -271,7 +271,7 @@ docker-build-goreleaser: build
 ## docker-run: Run picoclaw gateway in Docker (development image)
 docker-run:
 	docker run --rm -it \
-		-p 8080:8080 \
+		-p 18790:18790 \
 		-v $(PWD)/docker/config:/config \
 		-v picoclaw-data:/data \
 		-e LOG_LEVEL=info \

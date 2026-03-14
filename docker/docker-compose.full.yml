@@ -1,13 +1,20 @@
 # PicoClaw - Docker Compose (Full Setup)
 # Complete setup with gateway, agent, and optional launcher
 #
+# IMPORTANT: All webhook channels share the SAME port!
+# The Gateway HTTP server routes requests by path:
+#   /krabot/*    - Krabot WebSocket (e.g., /krabot/ws)
+#   /a2a/*       - A2A protocol (e.g., /a2a, /a2a/stream, /a2a/tasks/)
+#   /.well-known/agent.json - A2A agent discovery
+#   /health      - Health check endpoint
+#
 # Usage:
 #   cd docker && docker compose -f docker-compose.full.yml up
 #   # With launcher UI:
 #   cd docker && docker compose -f docker-compose.full.yml --profile launcher up
 
 services:
-  # Main gateway service
+  # Main gateway service - serves ALL webhook channels on one port
   picoclaw-gateway:
     build:
       context: ..
@@ -16,7 +23,12 @@ services:
     container_name: picoclaw-gateway
     restart: unless-stopped
     ports:
-      - "8080:8080"
+      # Gateway port (18790) - shared by Krabot, A2A, and other channels
+      # Both channels work simultaneously on different paths:
+      #   ws://localhost:18790/krabot/ws
+      #   http://localhost:18790/a2a
+      #   http://localhost:18790/.well-known/agent.json
+      - "18790:18790"
     volumes:
       - ./config:/config
       - picoclaw-data:/data
@@ -28,7 +40,7 @@ services:
     networks:
       - picoclaw
     healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/health"]
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:18790/health"]
       interval: 30s
       timeout: 10s
       retries: 3
