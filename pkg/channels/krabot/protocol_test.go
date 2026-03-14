@@ -71,6 +71,7 @@ func TestMessageTypes(t *testing.T) {
 		expected string
 	}{
 		{"MessageSend", TypeMessageSend, "message.send"},
+		{"MediaSend", TypeMediaSend, "media.send"},
 		{"Ping", TypePing, "ping"},
 		{"MessageCreate", TypeMessageCreate, "message.create"},
 		{"MessageUpdate", TypeMessageUpdate, "message.update"},

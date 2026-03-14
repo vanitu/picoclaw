@@ -6,6 +6,7 @@ import "time"
 const (
 	// Client → Server
 	TypeMessageSend  = "message.send"
+	TypeMediaSend    = "media.send"
 	TypePing         = "ping"
 
 	// Server → Client

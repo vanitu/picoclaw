@@ -74,16 +74,23 @@ func (c *KrabotChannel) handleWebSocket(w http.ResponseWriter, r *http.Request) 
 	go c.readLoop(kc)
 }
 
-// authenticate checks the Bearer token.
+// authenticate checks the Bearer token or query param token.
 func (c *KrabotChannel) authenticate(r *http.Request) bool {
 	token := c.config.Token
 	if token == "" {
 		return false
 	}
 
+	// Check Bearer token in header (preferred, more secure)
 	auth := r.Header.Get("Authorization")
 	if after, ok := strings.CutPrefix(auth, "Bearer "); ok {
 		return after == token
+	}
+
+	// Fall back to query parameter (less secure, for development/simple clients)
+	queryToken := r.URL.Query().Get("token")
+	if queryToken != "" {
+		return queryToken == token
 	}
 
 	return false
@@ -185,6 +192,9 @@ func (c *KrabotChannel) handleMessage(kc *krabotConn, msg KrabotMessage) {
 	case TypeMessageSend:
 		c.handleMessageSend(kc, msg)
 
+	case TypeMediaSend:
+		c.handleMediaSend(kc, msg)
+
 	default:
 		errMsg := newError("unknown_type", fmt.Sprintf("unknown message type: %s", msg.Type))
 		kc.writeJSON(errMsg)
@@ -250,6 +260,68 @@ func (c *KrabotChannel) handleMessageSend(kc *krabotConn, msg KrabotMessage) {
 
 	// Pass to AI for processing
 	c.HandleMessage(c.ctx, peer, msg.ID, senderID, chatID, content, mediaPaths, metadata, sender)
+}
+
+// handleMediaSend processes a media.send from a client (media-only message).
+func (c *KrabotChannel) handleMediaSend(kc *krabotConn, msg KrabotMessage) {
+	// Must have at least one media item
+	if len(msg.Payload.Media) == 0 {
+		kc.writeJSON(newError("empty_media", "media.send requires at least one media item"))
+		return
+	}
+
+	// Process media URLs
+	var mediaPaths []string
+	for _, media := range msg.Payload.Media {
+		// Validate media URL
+		if media.URL == "" {
+			continue
+		}
+		// Validate MIME type if whitelist configured
+		if !c.config.IsAllowedType(media.ContentType) {
+			logger.WarnCF("krabot", "Rejected media type", map[string]any{
+				"type": media.ContentType,
+			})
+			continue
+		}
+		// Store URL reference for AI processing
+		mediaPaths = append(mediaPaths, media.URL)
+	}
+
+	if len(mediaPaths) == 0 {
+		kc.writeJSON(newError("invalid_media", "no valid media URLs provided"))
+		return
+	}
+
+	sessionID := kc.sessionID
+	chatID := "krabot:" + sessionID
+	senderID := "krabot-user"
+
+	peer := bus.Peer{Kind: "direct", ID: chatID}
+
+	metadata := map[string]string{
+		"platform":   "krabot",
+		"session_id": sessionID,
+		"conn_id":    kc.id,
+	}
+
+	logger.DebugCF("krabot", "Received media", map[string]any{
+		"session_id": sessionID,
+		"media":      len(mediaPaths),
+	})
+
+	sender := bus.SenderInfo{
+		Platform:    "krabot",
+		PlatformID:  senderID,
+		CanonicalID: identity.BuildCanonicalID("krabot", senderID),
+	}
+
+	if !c.IsAllowedSender(sender) {
+		return
+	}
+
+	// Pass to AI for processing (empty content, media-only)
+	c.HandleMessage(c.ctx, peer, msg.ID, senderID, chatID, "", mediaPaths, metadata, sender)
 }
 
 // truncate truncates a string to maxLen runes.
