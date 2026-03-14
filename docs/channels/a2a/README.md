@@ -10,16 +10,32 @@ A2A is designed for:
 - External agent integration
 - Task delegation and orchestration
 
+## Multi-Channel Coexistence
+
+**Important:** A2A shares the Gateway HTTP server with other webhook-based channels (Pico, Krabot, LINE, WeCom, etc.). All channels run on the **same port** (default: 18790) and are routed by path:
+
+| Channel | Path | Example URL |
+|---------|------|-------------|
+| Pico Protocol | `/pico/*` | `ws://localhost:18790/pico/ws` |
+| Krabot | `/krabot/*` | `ws://localhost:18790/krabot/ws` |
+| **A2A** | `/a2a/*` | `http://localhost:18790/a2a` |
+| A2A Discovery | `/.well-known/agent.json` | `http://localhost:18790/.well-known/agent.json` |
+
+You can enable multiple channels simultaneously in your configuration.
+
 ## 1. Example Configuration
 
 Add this to `config.json`:
 
 ```json
 {
+  "gateway": {
+    "host": "0.0.0.0",
+    "port": 18790
+  },
   "channels": {
     "a2a": {
       "enabled": true,
-      "port": 8080,
       "token": "your-secure-token",
       "agent_card": {
         "name": "PicoClaw Agent",
@@ -56,7 +72,6 @@ Add this to `config.json`:
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | enabled | bool | Yes | Enable the A2A channel |
-| port | int | No | HTTP port (default: same as gateway) |
 | token | string | No | Authentication token for requests |
 | agent_card | object | Yes | Agent metadata and capabilities |
 | agent_card.name | string | Yes | Agent name |
@@ -78,11 +93,12 @@ Add this to `config.json`:
 
 ```bash
 export PICOCLAW_CHANNELS_A2A_ENABLED=true
-export PICOCLAW_CHANNELS_A2A_PORT=8080
 export PICOCLAW_CHANNELS_A2A_TOKEN="your-secure-token"
 ```
 
 ## 4. Endpoints
+
+All endpoints are served on the Gateway port (default: 18790) under the `/a2a` path:
 
 ### Agent Card Discovery
 
@@ -122,6 +138,13 @@ POST /a2a
 ```
 
 Main endpoint for agent communication using JSON-RPC 2.0.
+
+### Task Operations
+
+```
+GET    /a2a/tasks/:id       # Get task status
+POST   /a2a/tasks/:id/cancel # Cancel a task
+```
 
 ### Streaming Endpoint
 
@@ -247,7 +270,7 @@ Cancel a running task:
 Connect to the streaming endpoint for real-time updates:
 
 ```javascript
-const ws = new WebSocket('ws://localhost:8080/a2a/stream');
+const ws = new WebSocket('ws://localhost:18790/a2a/stream');
 
 ws.onopen = () => {
   // Authenticate
@@ -284,7 +307,7 @@ ws.onmessage = (event) => {
 Include the token in the `Authorization` header:
 
 ```bash
-curl -X POST http://localhost:8080/a2a \
+curl -X POST http://localhost:18790/a2a \
   -H "Authorization: Bearer YOUR_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc": "2.0", "method": "tasks/send", ...}'
@@ -473,7 +496,7 @@ class A2AClient:
         return resp.json()
 
 # Usage
-client = A2AClient("http://localhost:8080", "your-token")
+client = A2AClient("http://localhost:18790", "your-token")
 
 # Get agent info
 card = client.get_agent_card()
@@ -496,3 +519,4 @@ print(f"Response: {result['result']['artifacts'][0]['parts'][0]['text']}")
 - ✅ Error handling with standard codes
 - ✅ Authentication support
 - ✅ Concurrent task execution
+- ✅ Multi-channel coexistence (shares port with Pico, Krabot, etc.)

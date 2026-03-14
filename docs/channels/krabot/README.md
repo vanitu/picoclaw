@@ -9,12 +9,29 @@ Krabot is ideal for:
 - Human-in-the-loop AI interactions
 - Applications requiring direct user communication with agents
 
+## Multi-Channel Coexistence
+
+**Important:** Krabot shares the Gateway HTTP server with other webhook-based channels (Pico, A2A, LINE, WeCom, etc.). All channels run on the **same port** (default: 18790) and are routed by path:
+
+| Channel | Path | Example URL |
+|---------|------|-------------|
+| Pico Protocol | `/pico/*` | `ws://localhost:18790/pico/ws` |
+| **Krabot** | `/krabot/*` | `ws://localhost:18790/krabot/ws` |
+| A2A | `/a2a/*` | `http://localhost:18790/a2a` |
+| A2A Discovery | `/.well-known/agent.json` | `http://localhost:18790/.well-known/agent.json` |
+
+You can enable multiple channels simultaneously in your configuration.
+
 ## 1. Example Configuration
 
 Add this to `config.json`:
 
 ```json
 {
+  "gateway": {
+    "host": "0.0.0.0",
+    "port": 18790
+  },
   "channels": {
     "krabot": {
       "enabled": true,
@@ -72,12 +89,14 @@ export PICOCLAW_CHANNELS_KRABOT_MAX_FILE_SIZE=10485760
 ws://{gateway_host}:{gateway_port}/krabot/ws
 ```
 
+**Default:** `ws://localhost:18790/krabot/ws`
+
 ### Authentication
 
 Include the token in the `Authorization` header:
 
 ```javascript
-const ws = new WebSocket('ws://localhost:8080/krabot/ws', [], {
+const ws = new WebSocket('ws://localhost:18790/krabot/ws', [], {
   headers: { Authorization: 'Bearer YOUR_TOKEN' }
 });
 ```
@@ -85,7 +104,7 @@ const ws = new WebSocket('ws://localhost:8080/krabot/ws', [], {
 Or via query parameter (less secure):
 
 ```javascript
-const ws = new WebSocket('ws://localhost:8080/krabot/ws?token=YOUR_TOKEN');
+const ws = new WebSocket('ws://localhost:18790/krabot/ws?token=YOUR_TOKEN');
 ```
 
 ### Session Management
@@ -93,7 +112,7 @@ const ws = new WebSocket('ws://localhost:8080/krabot/ws?token=YOUR_TOKEN');
 Specify a session ID for persistent conversations:
 
 ```javascript
-const ws = new WebSocket('ws://localhost:8080/krabot/ws?session_id=my-session-123');
+const ws = new WebSocket('ws://localhost:18790/krabot/ws?session_id=my-session-123');
 ```
 
 If not provided, a UUID is automatically generated.
@@ -262,7 +281,7 @@ class KrabotClient {
 }
 
 // Usage
-const client = new KrabotClient('ws://localhost:8080', 'my-token');
+const client = new KrabotClient('ws://localhost:18790', 'my-token');
 client.connect();
 client.sendMessage('Hello, Krabot!');
 ```
@@ -306,3 +325,4 @@ client.sendMessage('Hello, Krabot!');
 - ✅ CORS support
 - ✅ Connection limits
 - ✅ Token-based authentication
+- ✅ Multi-channel coexistence (shares port with Pico, A2A, etc.)

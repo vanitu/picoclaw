@@ -16,10 +16,11 @@ docker compose logs -f picoclaw-gateway
 
 ## Multi-Channel Configuration
 
-**Important:** All webhook-based channels (Krabot, A2A, LINE, WeCom, etc.) share the **same port** (`18790` by default). The Gateway HTTP server routes requests by path:
+**Important:** All webhook-based channels share the **same port** (`18790` by default). The Gateway HTTP server routes requests by path:
 
 | Channel | Path | Full URL Example |
 |---------|------|------------------|
+| Pico Protocol | `/pico/ws` | `ws://localhost:18790/pico/ws` |
 | Krabot WebSocket | `/krabot/ws` | `ws://localhost:18790/krabot/ws` |
 | A2A JSON-RPC | `/a2a` | `http://localhost:18790/a2a` |
 | A2A Tasks | `/a2a/tasks/:id` | `http://localhost:18790/a2a/tasks/123` |
@@ -27,9 +28,9 @@ docker compose logs -f picoclaw-gateway
 | A2A Discovery | `/.well-known/agent.json` | `http://localhost:18790/.well-known/agent.json` |
 | Health Check | `/health` | `http://localhost:18790/health` |
 
-### Using Both Krabot and A2A Together
+### Using Multiple Channels Together
 
-Enable both channels in your `config.json`:
+Enable multiple channels in your `config.json`:
 
 ```json
 {
@@ -38,6 +39,10 @@ Enable both channels in your `config.json`:
     "port": 18790
   },
   "channels": {
+    "pico": {
+      "enabled": true,
+      "token": "your-pico-token"
+    },
     "krabot": {
       "enabled": true,
       "token": "your-krabot-token"
@@ -46,15 +51,16 @@ Enable both channels in your `config.json`:
       "enabled": true,
       "token": "your-a2a-token",
       "agent_card": {
-        "name": "My Agent",
-        "description": "Multi-channel AI agent"
+        "name": "My Multi-Channel Agent",
+        "description": "Accessible via Pico, Krabot, and A2A"
       }
     }
   }
 }
 ```
 
-Both channels work simultaneously on the same port, differentiated by path:
+All channels work simultaneously on the same port, differentiated by path:
+- Pico clients connect to: `ws://your-host:18790/pico/ws`
 - Krabot clients connect to: `ws://your-host:18790/krabot/ws`
 - A2A clients POST to: `http://your-host:18790/a2a`
 
@@ -97,7 +103,7 @@ make docker-build
 
 | Port | Service | Description |
 |------|---------|-------------|
-| 18790 | Gateway | Shared by all webhook channels (Krabot, A2A, etc.) |
+| 18790 | Gateway | Shared by all webhook channels (Pico, Krabot, A2A, etc.) |
 | 3000 | Launcher | Web UI (optional, with `--profile launcher`) |
 
 ## Volumes

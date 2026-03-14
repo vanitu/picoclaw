@@ -34,17 +34,17 @@ VOLUME ["/data", "/config"]
 WORKDIR /data
 
 # Expose ports
-# 18790 - Gateway API (shared by all webhook channels: Krabot, A2A, etc.)
+# 18790 - Gateway API (shared by all webhook channels: Pico, Krabot, A2A, etc.)
+#   /pico/*    - Pico Protocol WebSocket
 #   /krabot/*  - Krabot WebSocket
 #   /a2a/*     - A2A protocol
 # 3000 - Launcher Web UI
-EXPOSE 18790 8080 3000
+EXPOSE 18790 3000
 
 # Health check (launcher mode)
 HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
     CMD wget -q --spider http://localhost:3000/api/health 2>/dev/null || \
-        wget -q --spider http://localhost:18790/health 2>/dev/null || \
-        wget -q --spider http://localhost:8080/health 2>/dev/null || exit 1
+        wget -q --spider http://localhost:18790/health 2>/dev/null || exit 1
 
 # Entrypoint handles initialization
 ENTRYPOINT ["/entrypoint.sh"]
