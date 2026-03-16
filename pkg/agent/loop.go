@@ -26,6 +26,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/constants"
 	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/media"
+	"github.com/sipeed/picoclaw/pkg/middlewares"
 	"github.com/sipeed/picoclaw/pkg/providers"
 	"github.com/sipeed/picoclaw/pkg/routing"
 	"github.com/sipeed/picoclaw/pkg/skills"
@@ -51,6 +52,23 @@ type AgentLoop struct {
 	mu             sync.RWMutex
 	// Track active requests for safe provider cleanup
 	activeRequests sync.WaitGroup
+	// callbacks allows external code to customize agent behavior
+	callbacks AgentLoopCallbacks
+}
+
+// AgentLoopCallbacks allows customizing agent behavior without modifying core logic
+type AgentLoopCallbacks interface {
+	OnToolCall(name string, args map[string]any)
+	OnToolResult(name string, result *tools.ToolResult)
+	OnEmptyFinalAnswer(iteration int, maxIterations int) string
+	// OnEmptyFinalAnswerExtended is called when the LLM returns empty content
+	// after tools were executed. Return modified messages and true to request
+	// one more iteration with the modified messages.
+	OnEmptyFinalAnswerExtended(
+		messages []providers.Message,
+		iteration int,
+		maxIterations int,
+	) (modifiedMessages []providers.Message, requestAnotherIteration bool)
 }
 
 // processOptions configures how a message is processed
@@ -106,6 +124,9 @@ func NewAgentLoop(
 		fallback:    fallbackChain,
 		cmdRegistry: commands.NewRegistry(commands.BuiltinDefinitions()),
 	}
+
+	// Set default middleware for handling tool calls and empty responses
+	al.SetCallbacks(middlewares.NewDefault())
 
 	return al
 }
@@ -320,6 +341,13 @@ func (al *AgentLoop) Run(ctx context.Context) error {
 
 func (al *AgentLoop) Stop() {
 	al.running.Store(false)
+}
+
+// SetCallbacks allows external code to hook into agent behavior for customization.
+// This enables middleware patterns where tool calls and empty responses can be
+// handled by external code without modifying picoclaw's core logic.
+func (al *AgentLoop) SetCallbacks(cb AgentLoopCallbacks) {
+	al.callbacks = cb
 }
 
 // Close releases resources held by agent session stores. Call after Stop.
@@ -890,7 +918,7 @@ func (al *AgentLoop) runAgentLoop(
 	agent.Sessions.AddMessage(opts.SessionKey, "user", opts.UserMessage)
 
 	// 3. Run LLM iteration loop
-	finalContent, iteration, err := al.runLLMIteration(ctx, agent, messages, opts)
+	finalContent, iteration, toolsExecuted, err := al.runLLMIteration(ctx, agent, messages, opts)
 	if err != nil {
 		return "", err
 	}
@@ -900,7 +928,16 @@ func (al *AgentLoop) runAgentLoop(
 
 	// 4. Handle empty response
 	if finalContent == "" {
-		finalContent = opts.DefaultResponse
+		if al.callbacks != nil {
+			finalContent = al.callbacks.OnEmptyFinalAnswer(iteration, agent.MaxIterations)
+		}
+		if finalContent == "" {
+			if toolsExecuted {
+				finalContent = "I checked the requested information but have nothing to report."
+			} else {
+				finalContent = opts.DefaultResponse
+			}
+		}
 	}
 
 	// 5. Save final assistant message to session
@@ -991,14 +1028,17 @@ func (al *AgentLoop) handleReasoning(
 }
 
 // runLLMIteration executes the LLM call loop with tool handling.
+// Returns final content, iteration count, whether any tools were executed, and any error.
 func (al *AgentLoop) runLLMIteration(
 	ctx context.Context,
 	agent *AgentInstance,
 	messages []providers.Message,
 	opts processOptions,
-) (string, int, error) {
+) (string, int, bool, error) {
 	iteration := 0
 	var finalContent string
+	toolsExecuted := false
+	forcedIteration := false // Track if we already forced one extra iteration
 
 	// Determine effective model tier for this conversation turn.
 	// selectCandidates evaluates routing once and the decision is sticky for
@@ -1165,7 +1205,7 @@ func (al *AgentLoop) runLLMIteration(
 					"model":     activeModel,
 					"error":     err.Error(),
 				})
-			return "", iteration, fmt.Errorf("LLM call failed after retries: %w", err)
+			return "", iteration, toolsExecuted, fmt.Errorf("LLM call failed after retries: %w", err)
 		}
 
 		go al.handleReasoning(
@@ -1191,6 +1231,26 @@ func (al *AgentLoop) runLLMIteration(
 			if finalContent == "" && response.ReasoningContent != "" {
 				finalContent = response.ReasoningContent
 			}
+
+			// If empty after tools executed, allow callback to request one more iteration
+			if finalContent == "" && toolsExecuted && !forcedIteration {
+				if al.callbacks != nil {
+					newMessages, shouldContinue := al.callbacks.OnEmptyFinalAnswerExtended(
+						messages, iteration, agent.MaxIterations,
+					)
+					if shouldContinue {
+						messages = newMessages
+						forcedIteration = true
+						logger.InfoCF("agent", "Forcing one more iteration due to empty response after tools",
+							map[string]any{
+								"agent_id":  agent.ID,
+								"iteration": iteration,
+							})
+						continue
+					}
+				}
+			}
+
 			logger.InfoCF("agent", "LLM response without tool calls (direct answer)",
 				map[string]any{
 					"agent_id":      agent.ID,
@@ -1199,6 +1259,9 @@ func (al *AgentLoop) runLLMIteration(
 				})
 			break
 		}
+
+		// Tool calls will be executed
+		toolsExecuted = true
 
 		normalizedToolCalls := make([]providers.ToolCall, 0, len(response.ToolCalls))
 		for _, tc := range response.ToolCalls {
@@ -1276,6 +1339,11 @@ func (al *AgentLoop) runLLMIteration(
 						"iteration": iteration,
 					})
 
+				// Callback for middleware tracking
+				if al.callbacks != nil {
+					al.callbacks.OnToolCall(tc.Name, tc.Arguments)
+				}
+
 				// Create async callback for tools that implement AsyncExecutor.
 				// When the background work completes, this publishes the result
 				// as an inbound system message so processSystemMessage routes it
@@ -1334,6 +1402,11 @@ func (al *AgentLoop) runLLMIteration(
 
 		// Process results in original order (send to user, save to session)
 		for _, r := range agentResults {
+			// Callback for middleware tracking
+			if al.callbacks != nil {
+				al.callbacks.OnToolResult(r.tc.Name, r.result)
+			}
+
 			// Send ForUser content to user immediately if not Silent
 			if !r.result.Silent && r.result.ForUser != "" && opts.SendResponse {
 				al.bus.PublishOutbound(ctx, bus.OutboundMessage{
@@ -1398,7 +1471,7 @@ func (al *AgentLoop) runLLMIteration(
 		})
 	}
 
-	return finalContent, iteration, nil
+	return finalContent, iteration, toolsExecuted, nil
 }
 
 // selectCandidates returns the model candidates and resolved model name to use

@@ -43,11 +43,25 @@ type ContextBuilder struct {
 	// build time. This catches nested file creations/deletions/mtime changes
 	// that may not update the top-level skill root directory mtime.
 	skillFilesAtCache map[string]time.Time
+
+	// a2aRegistry provides access to remote A2A agents for system prompt generation.
+	a2aRegistry A2ARegistryProvider
+}
+
+// A2ARegistryProvider is the interface needed from the A2A registry.
+type A2ARegistryProvider interface {
+	GetHealthySummaries() string
 }
 
 func (cb *ContextBuilder) WithToolDiscovery(useBM25, useRegex bool) *ContextBuilder {
 	cb.toolDiscoveryBM25 = useBM25
 	cb.toolDiscoveryRegex = useRegex
+	return cb
+}
+
+// WithA2ARegistry sets the A2A registry for including remote agents in the system prompt.
+func (cb *ContextBuilder) WithA2ARegistry(registry A2ARegistryProvider) *ContextBuilder {
+	cb.a2aRegistry = registry
 	return cb
 }
 
@@ -148,6 +162,14 @@ func (cb *ContextBuilder) BuildSystemPrompt() string {
 The following skills extend your capabilities. To use a skill, read its SKILL.md file using the read_file tool.
 
 %s`, skillsSummary))
+	}
+
+	// A2A Remote Agents - only include if registry is set and has healthy agents
+	if cb.a2aRegistry != nil {
+		a2aSummaries := cb.a2aRegistry.GetHealthySummaries()
+		if a2aSummaries != "" {
+			parts = append(parts, a2aSummaries)
+		}
 	}
 
 	// Memory context

@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/sipeed/picoclaw/pkg/a2a"
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/memory"
 	"github.com/sipeed/picoclaw/pkg/providers"
@@ -47,6 +48,9 @@ type AgentInstance struct {
 	// LightCandidates holds the resolved provider candidates for the light model.
 	// Pre-computed at agent creation to avoid repeated model_list lookups at runtime.
 	LightCandidates []providers.FallbackCandidate
+
+	// A2ARegistry manages remote A2A agents. Nil if not configured.
+	A2ARegistry *a2a.Registry
 }
 
 // NewAgentInstance creates an agent instance from config.
@@ -104,6 +108,20 @@ func NewAgentInstance(
 		mcpDiscoveryActive && cfg.Tools.MCP.Discovery.UseBM25,
 		mcpDiscoveryActive && cfg.Tools.MCP.Discovery.UseRegex,
 	)
+
+	// Initialize A2A registry and tools if configured
+	var a2aRegistry *a2a.Registry
+	if len(cfg.A2ARegistry.Agents) > 0 {
+		a2aRegistry = a2a.NewRegistry(cfg.A2ARegistry)
+		a2aClient := a2a.NewClient()
+
+		// Register A2A tools
+		toolsRegistry.Register(tools.NewA2ACallTool(a2aRegistry, a2aClient))
+		toolsRegistry.Register(tools.NewA2ADetailsTool(a2aRegistry))
+
+		// Add A2A registry to context builder for system prompt
+		contextBuilder.WithA2ARegistry(a2aRegistry)
+	}
 
 	agentID := routing.DefaultAgentID
 	agentName := ""
@@ -236,6 +254,7 @@ func NewAgentInstance(
 		Candidates:                candidates,
 		Router:                    router,
 		LightCandidates:           lightCandidates,
+		A2ARegistry:               a2aRegistry,
 	}
 }
 
@@ -282,8 +301,11 @@ func compilePatterns(patterns []string) []*regexp.Regexp {
 	return compiled
 }
 
-// Close releases resources held by the agent's session store.
+// Close releases resources held by the agent's session store and A2A registry.
 func (a *AgentInstance) Close() error {
+	if a.A2ARegistry != nil {
+		a.A2ARegistry.Stop()
+	}
 	if a.Sessions != nil {
 		return a.Sessions.Close()
 	}

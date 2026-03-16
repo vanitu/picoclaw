@@ -75,17 +75,18 @@ func (f *FlexibleStringSlice) UnmarshalText(text []byte) error {
 }
 
 type Config struct {
-	Agents    AgentsConfig    `json:"agents"`
-	Bindings  []AgentBinding  `json:"bindings,omitempty"`
-	Session   SessionConfig   `json:"session,omitempty"`
-	Channels  ChannelsConfig  `json:"channels"`
-	Providers ProvidersConfig `json:"providers,omitempty"`
-	ModelList []ModelConfig   `json:"model_list"` // New model-centric provider configuration
-	Gateway   GatewayConfig   `json:"gateway"`
-	Tools     ToolsConfig     `json:"tools"`
-	Heartbeat HeartbeatConfig `json:"heartbeat"`
-	Devices   DevicesConfig   `json:"devices"`
-	Voice     VoiceConfig     `json:"voice"`
+	Agents      AgentsConfig      `json:"agents"`
+	Bindings    []AgentBinding    `json:"bindings,omitempty"`
+	Session     SessionConfig     `json:"session,omitempty"`
+	Channels    ChannelsConfig    `json:"channels"`
+	Providers   ProvidersConfig   `json:"providers,omitempty"`
+	ModelList   []ModelConfig     `json:"model_list"` // New model-centric provider configuration
+	Gateway     GatewayConfig     `json:"gateway"`
+	Tools       ToolsConfig       `json:"tools"`
+	Heartbeat   HeartbeatConfig   `json:"heartbeat"`
+	Devices     DevicesConfig     `json:"devices"`
+	Voice       VoiceConfig       `json:"voice"`
+	A2ARegistry A2ARegistryConfig `json:"a2a_registry,omitempty"`
 	// BuildInfo contains build-time version information
 	BuildInfo BuildInfo `json:"build_info,omitempty"`
 }
@@ -536,6 +537,19 @@ type A2AConfig struct {
 
 	// WebSocket streaming
 	EnableStreaming bool `json:"enable_streaming,omitempty"`
+}
+
+// A2ARegistryConfig configures the A2A client registry for remote agents.
+type A2ARegistryConfig struct {
+	Agents []A2ARegistryAgentConfig `json:"agents"`
+}
+
+// A2ARegistryAgentConfig configures a single remote A2A agent.
+type A2ARegistryAgentConfig struct {
+	Name            string   `json:"name"`
+	Endpoint        string   `json:"endpoint"`
+	Token           string   `json:"token"`
+	RefreshInterval string   `json:"refresh_interval"` // Duration string, e.g., "1h"
 }
 
 // IRCConfig configures the IRC channel.

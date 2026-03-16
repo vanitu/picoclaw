@@ -12,6 +12,11 @@
 #   cd docker && docker compose up
 #   # or from project root:
 #   docker compose -f docker/docker-compose.yml up
+#
+networks:
+  krabot-bots:
+    driver: bridge
+    name: krabot-bots # fixed name so krabot_local_manager/cli can attach containers
 
 services:
   picoclaw-gateway:
@@ -21,6 +26,8 @@ services:
     image: picoclaw:dev
     container_name: picoclaw-gateway
     restart: unless-stopped
+    networks:
+      - krabot-bots # krabot containers can reach this service for LLM requests
     ports:
       # Gateway default port (18790) - all channels share this port
       - "18790:18790"
