@@ -11,6 +11,7 @@ import (
 
 	"github.com/sipeed/picoclaw/pkg/a2a"
 	"github.com/sipeed/picoclaw/pkg/config"
+	"github.com/sipeed/picoclaw/pkg/media"
 	"github.com/sipeed/picoclaw/pkg/memory"
 	"github.com/sipeed/picoclaw/pkg/providers"
 	"github.com/sipeed/picoclaw/pkg/routing"
@@ -70,7 +71,7 @@ func NewAgentInstance(
 	readRestrict := restrict && !defaults.AllowReadOutsideWorkspace
 
 	// Compile path whitelist patterns from config.
-	allowReadPaths := compilePatterns(cfg.Tools.AllowReadPaths)
+	allowReadPaths := buildAllowReadPatterns(cfg)
 	allowWritePaths := compilePatterns(cfg.Tools.AllowWritePaths)
 
 	toolsRegistry := tools.NewToolRegistry()
@@ -86,7 +87,7 @@ func NewAgentInstance(
 		toolsRegistry.Register(tools.NewListDirTool(workspace, readRestrict, allowReadPaths))
 	}
 	if cfg.Tools.IsToolEnabled("exec") {
-		execTool, err := tools.NewExecToolWithConfig(workspace, restrict, cfg)
+		execTool, err := tools.NewExecToolWithConfig(workspace, restrict, cfg, allowReadPaths)
 		if err != nil {
 			log.Fatalf("Critical error: unable to initialize exec tool: %v", err)
 		}
@@ -299,6 +300,28 @@ func compilePatterns(patterns []string) []*regexp.Regexp {
 		compiled = append(compiled, re)
 	}
 	return compiled
+}
+
+func buildAllowReadPatterns(cfg *config.Config) []*regexp.Regexp {
+	var configured []string
+	if cfg != nil {
+		configured = cfg.Tools.AllowReadPaths
+	}
+
+	compiled := compilePatterns(configured)
+	mediaDirPattern := regexp.MustCompile(mediaTempDirPattern())
+	for _, pattern := range compiled {
+		if pattern.String() == mediaDirPattern.String() {
+			return compiled
+		}
+	}
+
+	return append(compiled, mediaDirPattern)
+}
+
+func mediaTempDirPattern() string {
+	sep := regexp.QuoteMeta(string(os.PathSeparator))
+	return "^" + regexp.QuoteMeta(filepath.Clean(media.TempDir())) + "(?:" + sep + "|$)"
 }
 
 // Close releases resources held by the agent's session store and A2A registry.
