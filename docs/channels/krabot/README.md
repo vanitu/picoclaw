@@ -133,20 +133,50 @@ Send a text message:
 }
 ```
 
+#### `message.send` with Media (Recommended)
+Send a text message with media attachments:
+```json
+{
+  "type": "message.send",
+  "id": "msg-123",
+  "payload": {
+    "content": "What do you see in this image?",
+    "media": [
+      {
+        "type": "image",
+        "url": "https://storage.yourdomain.com/files/abc123?signed=true",
+        "filename": "image.jpg",
+        "content_type": "image/jpeg"
+      }
+    ]
+  }
+}
+```
+
 #### `media.send`
-Send media with a signed URL:
+Send media-only message (no text content):
 ```json
 {
   "type": "media.send",
   "id": "media-123",
   "payload": {
-    "type": "image",
-    "url": "https://storage.yourdomain.com/files/abc123?signed=true",
-    "filename": "image.jpg",
-    "mime_type": "image/jpeg"
+    "media": [
+      {
+        "type": "image",
+        "url": "https://storage.yourdomain.com/files/abc123?signed=true",
+        "filename": "image.jpg",
+        "content_type": "image/jpeg"
+      }
+    ]
   }
 }
 ```
+
+**Note:** Media must be wrapped in a `media` array. Field names are:
+- `type`: `"image"`, `"audio"`, `"video"`, or `"file"`
+- `url`: The signed URL to download the file
+- `filename`: The original filename
+- `content_type`: The MIME type (e.g., `"image/png"`)
 
 ### Server → Client Messages
 
@@ -271,11 +301,22 @@ class KrabotClient {
     }));
   }
   
-  sendMedia(type, url, filename, mimeType) {
+  sendMessageWithMedia(content, mediaItems) {
+    // mediaItems: array of {type, url, filename, content_type}
+    this.ws.send(JSON.stringify({
+      type: 'message.send',
+      id: crypto.randomUUID(),
+      payload: { content, media: mediaItems }
+    }));
+  }
+  
+  sendMedia(type, url, filename, contentType) {
     this.ws.send(JSON.stringify({
       type: 'media.send',
       id: crypto.randomUUID(),
-      payload: { type, url, filename, mime_type: mimeType }
+      payload: { 
+        media: [{ type, url, filename, content_type: contentType }]
+      }
     }));
   }
 }
@@ -283,10 +324,101 @@ class KrabotClient {
 // Usage
 const client = new KrabotClient('ws://localhost:18790', 'my-token');
 client.connect();
+
+// Send text-only message
 client.sendMessage('Hello, Krabot!');
+
+// Send message with media (text + image)
+client.sendMessageWithMedia('What do you see?', [
+  {
+    type: 'image',
+    url: 'https://storage.example.com/photo.jpg?signed=true',
+    filename: 'photo.jpg',
+    content_type: 'image/jpeg'
+  }
+]);
+
+// Send media-only message
+client.sendMedia('image', 'https://storage.example.com/photo.jpg?signed=true', 'photo.jpg', 'image/jpeg');
 ```
 
-## 8. Security Best Practices
+## 8. Error Responses
+
+When something goes wrong, the server sends an error message:
+
+```json
+{
+  "type": "error",
+  "timestamp": 1710859200000,
+  "payload": {
+    "error": {
+      "code": "download_failed",
+      "message": "Cannot download given file",
+      "details": "dial tcp 127.0.0.1:3000: connect: connection refused",
+      "recoverable": false
+    }
+  }
+}
+```
+
+### Error Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `code` | string | Machine-readable error code |
+| `message` | string | Human-readable error message |
+| `details` | string | Technical details for debugging (optional) |
+| `recoverable` | boolean | Whether the client can retry (optional) |
+
+### Error Codes
+
+| Code | Description | Recoverable |
+|------|-------------|-------------|
+| `connection_refused` | Cannot connect to media server | ❌ No |
+| `timeout` | Media download timed out | ✅ Yes |
+| `not_found` | Media file not found (404) | ❌ No |
+| `forbidden` | Access to media denied (403) | ❌ No |
+| `server_error` | Media server error (5xx) | ✅ Yes |
+| `file_too_large` | Media exceeds size limit | ❌ No |
+| `dns_error` | Cannot resolve server address | ✅ Yes |
+| `download_failed` | Generic download failure | ❌ No |
+| `empty_content` | Message has no text and no media | ❌ No |
+| `invalid_message` | JSON parsing failed | ❌ No |
+| `unknown_type` | Unrecognized message type | ❌ No |
+| `empty_media` | Media message has no items | ❌ No |
+| `invalid_media` | No valid media URLs provided | ❌ No |
+
+### Handling Errors
+
+When a media download fails, the **entire message is rejected** — the agent will not receive a partial message. The client should:
+
+1. Display the error message to the user
+2. If `recoverable` is `true`, allow retry
+3. If `recoverable` is `false`, ask the user to check/fix the issue
+
+Example error handler:
+
+```javascript
+ws.onmessage = (event) => {
+  const msg = JSON.parse(event.data);
+  
+  if (msg.type === 'error') {
+    const { code, message, recoverable } = msg.payload.error;
+    console.error(`Error ${code}: ${message}`);
+    
+    if (recoverable) {
+      showRetryButton();
+    } else {
+      showErrorToUser(message);
+    }
+    return;
+  }
+  
+  // Handle other message types...
+};
+```
+
+## 9. Security Best Practices
 
 1. **Use strong tokens**: Generate tokens with at least 32 bytes of entropy
    ```bash
@@ -314,7 +446,7 @@ client.sendMessage('Hello, Krabot!');
    }
    ```
 
-## 9. Features
+## 10. Features
 
 - ✅ Real-time WebSocket communication
 - ✅ Session-based persistent conversations

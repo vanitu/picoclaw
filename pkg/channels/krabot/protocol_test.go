@@ -16,6 +16,46 @@ func TestNewMessage(t *testing.T) {
 	assert.NotZero(t, msg.Timestamp)
 }
 
+func TestNewMessage_WithMessageIDAndFinal(t *testing.T) {
+	msg := newMessage(TypeMessageCreate, MessagePayload{
+		Content:   "Hello, world!",
+		MessageID: "msg-123-abc",
+		Final:     true,
+	})
+
+	assert.Equal(t, TypeMessageCreate, msg.Type)
+	assert.Equal(t, "Hello, world!", msg.Payload.Content)
+	assert.Equal(t, "msg-123-abc", msg.Payload.MessageID)
+	assert.True(t, msg.Payload.Final)
+	assert.NotZero(t, msg.Timestamp)
+}
+
+func TestNewMessage_PlaceholderNotFinal(t *testing.T) {
+	msg := newMessage(TypeMessageCreate, MessagePayload{
+		Content:   "Thinking... 💭",
+		MessageID: "placeholder-456",
+		Final:     false,
+	})
+
+	assert.Equal(t, TypeMessageCreate, msg.Type)
+	assert.Equal(t, "Thinking... 💭", msg.Payload.Content)
+	assert.Equal(t, "placeholder-456", msg.Payload.MessageID)
+	assert.False(t, msg.Payload.Final)
+}
+
+func TestNewMessage_UpdateWithMessageID(t *testing.T) {
+	msg := newMessage(TypeMessageUpdate, MessagePayload{
+		Content:   "Updated content",
+		MessageID: "msg-123-abc",
+		Final:     true,
+	})
+
+	assert.Equal(t, TypeMessageUpdate, msg.Type)
+	assert.Equal(t, "Updated content", msg.Payload.Content)
+	assert.Equal(t, "msg-123-abc", msg.Payload.MessageID)
+	assert.True(t, msg.Payload.Final)
+}
+
 func TestNewError(t *testing.T) {
 	msg := newError("invalid_request", "Missing required field")
 
@@ -34,6 +74,8 @@ func TestNewTextMessage(t *testing.T) {
 	assert.Equal(t, content, msg.Payload.Content)
 	assert.Nil(t, msg.Payload.Error)
 	assert.Empty(t, msg.Payload.Media)
+	assert.Empty(t, msg.Payload.MessageID)
+	assert.False(t, msg.Payload.Final)
 	assert.NotZero(t, msg.Timestamp)
 }
 

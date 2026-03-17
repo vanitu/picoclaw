@@ -152,19 +152,22 @@ func (c *KrabotChannel) Send(ctx context.Context, msg bus.OutboundMessage) error
 		return channels.ErrNotRunning
 	}
 
-	outMsg := newTextMessage(msg.Content)
+	msgID := uuid.New().String()
+	outMsg := newMessage(TypeMessageCreate, MessagePayload{
+		Content:   msg.Content,
+		MessageID: msgID,
+		Final:     true,
+	})
 	return c.broadcastToSession(msg.ChatID, outMsg)
 }
 
 // EditMessage implements channels.MessageEditor.
 func (c *KrabotChannel) EditMessage(ctx context.Context, chatID string, messageID string, content string) error {
 	outMsg := newMessage(TypeMessageUpdate, MessagePayload{
-		Content: content,
+		Content:   content,
+		MessageID: messageID,
+		Final:     true,
 	})
-	// Include message ID in payload for updates
-	if outMsg.Payload.Error == nil {
-		// We could add message_id to payload if needed
-	}
 	return c.broadcastToSession(chatID, outMsg)
 }
 
@@ -184,10 +187,10 @@ func (c *KrabotChannel) StartTyping(ctx context.Context, chatID string) (func(),
 func (c *KrabotChannel) SendPlaceholder(ctx context.Context, chatID string) (string, error) {
 	msgID := uuid.New().String()
 	outMsg := newMessage(TypeMessageCreate, MessagePayload{
-		Content: "Thinking... 💭",
+		Content:   "Thinking... 💭",
+		MessageID: msgID,
+		Final:     false,
 	})
-	// Could include message_id in payload if client supports it
-	_ = msgID
 
 	if err := c.broadcastToSession(chatID, outMsg); err != nil {
 		return "", err

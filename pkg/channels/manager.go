@@ -307,6 +307,14 @@ func (m *Manager) initChannels() error {
 		m.initChannel("irc", "IRC")
 	}
 
+	if m.config.Channels.Krabot.Enabled && m.config.Channels.Krabot.Token != "" {
+		m.initChannel("krabot", "Krabot")
+	}
+
+	if m.config.Channels.A2A.Enabled {
+		m.initChannel("a2a", "A2A")
+	}
+
 	logger.InfoCF("channels", "Channel initialization completed", map[string]any{
 		"enabled_channels": len(m.channels),
 	})

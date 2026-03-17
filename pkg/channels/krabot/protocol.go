@@ -1,6 +1,9 @@
 package krabot
 
-import "time"
+import (
+	"fmt"
+	"time"
+)
 
 // Message types for Krabot protocol.
 const (
@@ -30,9 +33,11 @@ type KrabotMessage struct {
 
 // MessagePayload contains the message content and media.
 type MessagePayload struct {
-	Content string      `json:"content,omitempty"`
-	Media   []MediaPart `json:"media,omitempty"`
-	Error   *ErrorInfo  `json:"error,omitempty"`
+	Content   string      `json:"content,omitempty"`
+	Media     []MediaPart `json:"media,omitempty"`
+	Error     *ErrorInfo  `json:"error,omitempty"`
+	MessageID string      `json:"message_id,omitempty"`
+	Final     bool        `json:"final"`
 }
 
 // MediaPart represents a media attachment with ActiveStorage signed URL.
@@ -47,8 +52,30 @@ type MediaPart struct {
 
 // ErrorInfo contains error details.
 type ErrorInfo struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
+	Code        string `json:"code"`                  // Error code (e.g., "download_failed", "timeout")
+	Message     string `json:"message"`               // Human-readable message
+	Details     string `json:"details,omitempty"`     // Technical details for debugging
+	Recoverable bool   `json:"recoverable,omitempty"` // Whether the client can retry
+}
+
+// DownloadError represents a classified download error.
+type DownloadError struct {
+	Code        string
+	Message     string
+	Recoverable bool
+	Cause       error
+}
+
+func (e *DownloadError) Error() string {
+	if e.Cause != nil {
+		return fmt.Sprintf("%s: %v", e.Message, e.Cause)
+	}
+	return e.Message
+}
+
+// Unwrap returns the underlying error for errors.Is/As checks.
+func (e *DownloadError) Unwrap() error {
+	return e.Cause
 }
 
 // newMessage creates a KrabotMessage with the given type and payload.
@@ -66,6 +93,18 @@ func newError(code, message string) KrabotMessage {
 		Error: &ErrorInfo{
 			Code:    code,
 			Message: message,
+		},
+	})
+}
+
+// newErrorWithDetails creates an error KrabotMessage with full details.
+func newErrorWithDetails(code, message, details string, recoverable bool) KrabotMessage {
+	return newMessage(TypeError, MessagePayload{
+		Error: &ErrorInfo{
+			Code:        code,
+			Message:     message,
+			Details:     details,
+			Recoverable: recoverable,
 		},
 	})
 }

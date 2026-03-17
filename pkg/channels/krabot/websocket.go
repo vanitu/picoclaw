@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -206,12 +207,31 @@ func (c *KrabotChannel) handleMessage(kc *krabotConn, msg KrabotMessage) {
 // handleMessageSend processes a message.send from a client.
 func (c *KrabotChannel) handleMessageSend(kc *krabotConn, msg KrabotMessage) {
 	content := strings.TrimSpace(msg.Payload.Content)
-	
+
+	// Log incoming message
+	logger.DebugCF("krabot", "handleMessageSend: received message", map[string]any{
+		"session_id":   kc.sessionID,
+		"content_len":  len(msg.Payload.Content),
+		"media_count":  len(msg.Payload.Media),
+		"message_type": msg.Type,
+	})
+
 	// Check if content is empty and no media
 	if content == "" && len(msg.Payload.Media) == 0 {
+		logger.DebugCF("krabot", "handleMessageSend: empty content and media, rejecting", map[string]any{
+			"session_id": kc.sessionID,
+		})
 		kc.writeJSON(newError("empty_content", "message content and media are empty"))
 		return
 	}
+
+	// Inspect content for debugging
+	logger.DebugCF("krabot", "handleMessageSend: content inspection", map[string]any{
+		"content_preview":    truncate(msg.Payload.Content, 200),
+		"is_json_array":      strings.HasPrefix(strings.TrimSpace(msg.Payload.Content), "["),
+		"contains_image_url": strings.Contains(msg.Payload.Content, "image_url"),
+		"contains_base64":    strings.Contains(msg.Payload.Content, "base64,"),
+	})
 
 	sessionID := kc.sessionID
 	chatID := "krabot:" + sessionID
@@ -222,7 +242,17 @@ func (c *KrabotChannel) handleMessageSend(kc *krabotConn, msg KrabotMessage) {
 	var mediaPaths []string
 	store := c.GetMediaStore()
 
-	for _, mediaItem := range msg.Payload.Media {
+	for i, mediaItem := range msg.Payload.Media {
+		// Log media item details
+		logger.DebugCF("krabot", "handleMessageSend: processing media item", map[string]any{
+			"index":          i,
+			"media_type":     mediaItem.Type,
+			"content_type":   mediaItem.ContentType,
+			"filename":       mediaItem.Filename,
+			"url_preview":    truncate(mediaItem.URL, 100),
+			"url_is_signed":  strings.Contains(mediaItem.URL, "?") || strings.Contains(mediaItem.URL, "signed"),
+			"url_is_base64":  strings.HasPrefix(mediaItem.URL, "data:"),
+		})
 		// Validate media URL
 		if mediaItem.URL == "" {
 			continue
@@ -236,24 +266,57 @@ func (c *KrabotChannel) handleMessageSend(kc *krabotConn, msg KrabotMessage) {
 		}
 
 		// Download file from signed URL
+		logger.DebugCF("krabot", "handleMessageSend: downloading media from URL", map[string]any{
+			"index":       i,
+			"url_preview": truncate(mediaItem.URL, 50),
+			"max_size":    c.config.GetMaxFileSize(),
+		})
+
 		localPath, err := DownloadFromURL(mediaItem.URL, c.config.GetMaxFileSize())
 		if err != nil {
 			logger.ErrorCF("krabot", "Failed to download media", map[string]any{
 				"url":   mediaItem.URL[:50] + "...",
 				"error": err.Error(),
 			})
-			kc.writeJSON(newError("download_failed", "failed to download media file"))
-			continue
+			// Classify error and send detailed response
+			dlErr := ClassifyDownloadError(err)
+			kc.writeJSON(newErrorWithDetails(
+				dlErr.Code,
+				dlErr.Message,
+				err.Error(),
+				dlErr.Recoverable,
+			))
+			// Fail the message - don't process without media
+			return
 		}
+
+		logger.DebugCF("krabot", "handleMessageSend: media downloaded successfully", map[string]any{
+			"index":       i,
+			"local_path":  localPath,
+			"file_size":   getFileSize(localPath),
+		})
 
 		// Store in MediaStore (same as Telegram)
 		if store != nil {
+			logger.DebugCF("krabot", "handleMessageSend: storing media in MediaStore", map[string]any{
+				"index":        i,
+				"local_path":   localPath,
+				"filename":     mediaItem.Filename,
+				"content_type": mediaItem.ContentType,
+				"scope":        scope,
+			})
+
 			ref, err := store.Store(localPath, media.MediaMeta{
 				Filename:    mediaItem.Filename,
 				ContentType: mediaItem.ContentType,
 				Source:      "krabot",
 			}, scope)
 			if err == nil {
+				logger.DebugCF("krabot", "handleMessageSend: media stored successfully", map[string]any{
+					"index":     i,
+					"media_ref": ref,
+					"scope":     scope,
+				})
 				mediaPaths = append(mediaPaths, ref)
 				continue
 			}
@@ -279,6 +342,15 @@ func (c *KrabotChannel) handleMessageSend(kc *krabotConn, msg KrabotMessage) {
 		"media":      len(mediaPaths),
 	})
 
+	// Log final forwarding details
+	logger.DebugCF("krabot", "handleMessageSend: forwarding to agent", map[string]any{
+		"session_id":     sessionID,
+		"chat_id":        chatID,
+		"content_preview": truncate(content, 100),
+		"media_refs":     mediaPaths,
+		"media_count":    len(mediaPaths),
+	})
+
 	sender := bus.SenderInfo{
 		Platform:    "krabot",
 		PlatformID:  senderID,
@@ -295,8 +367,18 @@ func (c *KrabotChannel) handleMessageSend(kc *krabotConn, msg KrabotMessage) {
 
 // handleMediaSend processes a media.send from a client (media-only message).
 func (c *KrabotChannel) handleMediaSend(kc *krabotConn, msg KrabotMessage) {
+	// Log incoming media message
+	logger.DebugCF("krabot", "handleMediaSend: received media", map[string]any{
+		"session_id":  kc.sessionID,
+		"media_count": len(msg.Payload.Media),
+		"message_id":  msg.ID,
+	})
+
 	// Must have at least one media item
 	if len(msg.Payload.Media) == 0 {
+		logger.DebugCF("krabot", "handleMediaSend: no media items, rejecting", map[string]any{
+			"session_id": kc.sessionID,
+		})
 		kc.writeJSON(newError("empty_media", "media.send requires at least one media item"))
 		return
 	}
@@ -310,7 +392,17 @@ func (c *KrabotChannel) handleMediaSend(kc *krabotConn, msg KrabotMessage) {
 	var mediaPaths []string
 	store := c.GetMediaStore()
 
-	for _, mediaItem := range msg.Payload.Media {
+	for i, mediaItem := range msg.Payload.Media {
+		// Log media item details
+		logger.DebugCF("krabot", "handleMediaSend: processing media item", map[string]any{
+			"index":         i,
+			"media_type":    mediaItem.Type,
+			"content_type":  mediaItem.ContentType,
+			"filename":      mediaItem.Filename,
+			"url_preview":   truncate(mediaItem.URL, 100),
+			"url_is_signed": strings.Contains(mediaItem.URL, "?") || strings.Contains(mediaItem.URL, "signed"),
+			"url_is_base64": strings.HasPrefix(mediaItem.URL, "data:"),
+		})
 		// Validate media URL
 		if mediaItem.URL == "" {
 			continue
@@ -324,24 +416,57 @@ func (c *KrabotChannel) handleMediaSend(kc *krabotConn, msg KrabotMessage) {
 		}
 
 		// Download file from signed URL
+		logger.DebugCF("krabot", "handleMediaSend: downloading media from URL", map[string]any{
+			"index":       i,
+			"url_preview": truncate(mediaItem.URL, 50),
+			"max_size":    c.config.GetMaxFileSize(),
+		})
+
 		localPath, err := DownloadFromURL(mediaItem.URL, c.config.GetMaxFileSize())
 		if err != nil {
 			logger.ErrorCF("krabot", "Failed to download media", map[string]any{
 				"url":   mediaItem.URL[:50] + "...",
 				"error": err.Error(),
 			})
-			kc.writeJSON(newError("download_failed", "failed to download media file"))
-			continue
+			// Classify error and send detailed response
+			dlErr := ClassifyDownloadError(err)
+			kc.writeJSON(newErrorWithDetails(
+				dlErr.Code,
+				dlErr.Message,
+				err.Error(),
+				dlErr.Recoverable,
+			))
+			// Fail the media send - don't process without media
+			return
 		}
+
+		logger.DebugCF("krabot", "handleMediaSend: media downloaded successfully", map[string]any{
+			"index":      i,
+			"local_path": localPath,
+			"file_size":  getFileSize(localPath),
+		})
 
 		// Store in MediaStore (same as Telegram)
 		if store != nil {
+			logger.DebugCF("krabot", "handleMediaSend: storing media in MediaStore", map[string]any{
+				"index":        i,
+				"local_path":   localPath,
+				"filename":     mediaItem.Filename,
+				"content_type": mediaItem.ContentType,
+				"scope":        scope,
+			})
+
 			ref, err := store.Store(localPath, media.MediaMeta{
 				Filename:    mediaItem.Filename,
 				ContentType: mediaItem.ContentType,
 				Source:      "krabot",
 			}, scope)
 			if err == nil {
+				logger.DebugCF("krabot", "handleMediaSend: media stored successfully", map[string]any{
+					"index":     i,
+					"media_ref": ref,
+					"scope":     scope,
+				})
 				mediaPaths = append(mediaPaths, ref)
 				continue
 			}
@@ -354,6 +479,9 @@ func (c *KrabotChannel) handleMediaSend(kc *krabotConn, msg KrabotMessage) {
 	}
 
 	if len(mediaPaths) == 0 {
+		logger.DebugCF("krabot", "handleMediaSend: no valid media after processing", map[string]any{
+			"session_id": sessionID,
+		})
 		kc.writeJSON(newError("invalid_media", "no valid media URLs provided"))
 		return
 	}
@@ -369,6 +497,14 @@ func (c *KrabotChannel) handleMediaSend(kc *krabotConn, msg KrabotMessage) {
 	logger.DebugCF("krabot", "Received media", map[string]any{
 		"session_id": sessionID,
 		"media":      len(mediaPaths),
+	})
+
+	// Log final forwarding details
+	logger.DebugCF("krabot", "handleMediaSend: forwarding to agent", map[string]any{
+		"session_id":  sessionID,
+		"chat_id":     chatID,
+		"media_refs":  mediaPaths,
+		"media_count": len(mediaPaths),
 	})
 
 	sender := bus.SenderInfo{
@@ -392,4 +528,13 @@ func truncate(s string, maxLen int) string {
 		return s
 	}
 	return string(runes[:maxLen]) + "..."
+}
+
+// getFileSize returns the size of a file in bytes, or 0 if the file doesn't exist.
+func getFileSize(path string) int64 {
+	info, err := os.Stat(path)
+	if err != nil {
+		return 0
+	}
+	return info.Size()
 }

@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/sipeed/picoclaw/pkg/logger"
@@ -55,11 +56,24 @@ func (c *ActiveStorageClient) UploadFile(ctx context.Context, localPath string, 
 		return nil, fmt.Errorf("stat file: %w", err)
 	}
 
+	logger.DebugCF("krabot", "ActiveStorage: uploading file", map[string]any{
+		"local_path":   localPath,
+		"filename":     filename,
+		"content_type": contentType,
+		"file_size":    stat.Size(),
+	})
+
 	// 1. Request direct upload URL from Rails
 	uploadURL, err := c.requestUploadURL(ctx, filename, stat.Size(), contentType)
 	if err != nil {
 		return nil, fmt.Errorf("request upload URL: %w", err)
 	}
+
+	logger.DebugCF("krabot", "ActiveStorage: got upload URL", map[string]any{
+		"blob_id":          uploadURL.BlobID,
+		"signed_id":        uploadURL.SignedID,
+		"upload_url_preview": truncate(uploadURL.UploadURL, 50),
+	})
 
 	// 2. Upload file to storage service (S3, GCS, etc.)
 	if err := c.uploadToStorage(ctx, uploadURL.UploadURL, uploadURL.Headers, file); err != nil {
@@ -71,6 +85,11 @@ func (c *ActiveStorageClient) UploadFile(ctx context.Context, localPath string, 
 	if err != nil {
 		return nil, fmt.Errorf("confirm upload: %w", err)
 	}
+
+	logger.DebugCF("krabot", "ActiveStorage: upload complete", map[string]any{
+		"blob_id":   result.BlobID,
+		"signed_id": result.SignedID,
+	})
 
 	return result, nil
 }
@@ -266,13 +285,29 @@ func MediaPartFromUpload(result *UploadResult, mediaType, filename, contentType 
 // DownloadFromURL downloads a file from a URL and saves it to a temp file.
 // Returns the local file path. The caller is responsible for cleaning up the file.
 func DownloadFromURL(fileURL string, maxSize int64) (string, error) {
+	logger.DebugCF("krabot", "DownloadFromURL: starting download", map[string]any{
+		"url_preview": truncate(fileURL, 50),
+		"max_size":    maxSize,
+	})
+
 	client := &http.Client{Timeout: 30 * time.Second}
 
 	resp, err := client.Get(fileURL)
 	if err != nil {
+		logger.DebugCF("krabot", "DownloadFromURL: request failed", map[string]any{
+			"url_preview": truncate(fileURL, 50),
+			"error":       err.Error(),
+		})
 		return "", fmt.Errorf("download file: %w", err)
 	}
 	defer resp.Body.Close()
+
+	logger.DebugCF("krabot", "DownloadFromURL: got response", map[string]any{
+		"url_preview":    truncate(fileURL, 50),
+		"status_code":    resp.StatusCode,
+		"content_length": resp.ContentLength,
+		"content_type":   resp.Header.Get("Content-Type"),
+	})
 
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("download file: status %d", resp.StatusCode)
@@ -280,6 +315,10 @@ func DownloadFromURL(fileURL string, maxSize int64) (string, error) {
 
 	// Check content length if available
 	if resp.ContentLength > 0 && resp.ContentLength > maxSize {
+		logger.DebugCF("krabot", "DownloadFromURL: file too large", map[string]any{
+			"content_length": resp.ContentLength,
+			"max_size":       maxSize,
+		})
 		return "", fmt.Errorf("file too large: %d bytes (max %d)", resp.ContentLength, maxSize)
 	}
 
@@ -308,7 +347,106 @@ func DownloadFromURL(fileURL string, maxSize int64) (string, error) {
 		return "", fmt.Errorf("file too large: exceeds %d bytes", maxSize)
 	}
 
+	logger.DebugCF("krabot", "DownloadFromURL: download complete", map[string]any{
+		"temp_file":    tempFile.Name(),
+		"bytes_written": n,
+	})
+
 	return tempFile.Name(), nil
+}
+
+// ClassifyDownloadError classifies a download error into a DownloadError with code and recoverability.
+func ClassifyDownloadError(err error) *DownloadError {
+	if err == nil {
+		return nil
+	}
+
+	errStr := err.Error()
+
+	// Check for specific error patterns
+	switch {
+	// Connection refused - not recoverable (server down/wrong address)
+	case containsAny(errStr, "connection refused", "dial tcp"):
+		return &DownloadError{
+			Code:        "connection_refused",
+			Message:     "Cannot connect to media server",
+			Recoverable: false,
+			Cause:       err,
+		}
+
+	// Timeout errors - potentially recoverable
+	case containsAny(errStr, "timeout", "context deadline exceeded", "i/o timeout"):
+		return &DownloadError{
+			Code:        "timeout",
+			Message:     "Media download timed out",
+			Recoverable: true,
+			Cause:       err,
+		}
+
+	// HTTP 4xx errors - not recoverable (client errors)
+	case containsAny(errStr, "status 404", "not found"):
+		return &DownloadError{
+			Code:        "not_found",
+			Message:     "Media file not found",
+			Recoverable: false,
+			Cause:       err,
+		}
+
+	case containsAny(errStr, "status 403", "forbidden"):
+		return &DownloadError{
+			Code:        "forbidden",
+			Message:     "Access to media denied",
+			Recoverable: false,
+			Cause:       err,
+		}
+
+	// HTTP 5xx errors - potentially recoverable (server errors)
+	case containsAny(errStr, "status 5", "internal server error", "bad gateway", "service unavailable"):
+		return &DownloadError{
+			Code:        "server_error",
+			Message:     "Media server error",
+			Recoverable: true,
+			Cause:       err,
+		}
+
+	// File too large - not recoverable (client needs to upload smaller file)
+	case containsAny(errStr, "file too large", "exceeds"):
+		return &DownloadError{
+			Code:        "file_too_large",
+			Message:     "Media file exceeds size limit",
+			Recoverable: false,
+			Cause:       err,
+		}
+
+	// DNS resolution errors - potentially recoverable
+	case containsAny(errStr, "no such host", "lookup"):
+		return &DownloadError{
+			Code:        "dns_error",
+			Message:     "Cannot resolve media server address",
+			Recoverable: true,
+			Cause:       err,
+		}
+
+	// Default: unknown error, not recoverable
+	default:
+		return &DownloadError{
+			Code:        "download_failed",
+			Message:     "Failed to download media file",
+			Recoverable: false,
+			Cause:       err,
+		}
+	}
+}
+
+// containsAny checks if the string contains any of the substrings (case-insensitive).
+func containsAny(s string, subs ...string) bool {
+	lower := strings.ToLower(s)
+	for _, sub := range subs {
+		if strings.Contains(lower, strings.ToLower(sub)) {
+			return true
+		}
+	}
+	return false
 }
 
 // SendMediaWithActiveStorage uploads AI-generated media to ActiveStorage and sends to client.
