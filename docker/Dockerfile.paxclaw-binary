@@ -1,0 +1,26 @@
+# Multi-arch builder for paxclaw binary
+FROM --platform=$BUILDPLATFORM golang:1.24-alpine AS builder
+
+ARG TARGETOS
+ARG TARGETARCH
+
+WORKDIR /build
+
+RUN apk add --no-cache git
+
+# Copy picoclaw source
+COPY . .
+
+# Download deps
+RUN go mod download
+
+# Build binary as "paxclaw"
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
+    go build \
+    -ldflags "-s -w" \
+    -o paxclaw \
+    ./cmd/picoclaw
+
+# Export stage - just the binary
+FROM scratch
+COPY --from=builder /build/paxclaw /paxclaw
