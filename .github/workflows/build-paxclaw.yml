@@ -8,7 +8,7 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: krabots/paxclaw
+  IMAGE_NAME: ${{ github.repository_owner }}/paxclaw
 
 jobs:
   build:
