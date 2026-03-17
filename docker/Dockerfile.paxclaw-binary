@@ -14,6 +14,9 @@ COPY . .
 # Download deps
 RUN go mod download
 
+# Generate embedded files (copies workspace for onboard command)
+RUN go generate ./...
+
 # Build binary as "paxclaw"
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
     go build \
