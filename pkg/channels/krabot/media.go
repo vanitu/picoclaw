@@ -486,7 +486,7 @@ func (c *KrabotChannel) SendMediaWithActiveStorage(ctx context.Context, chatID s
 		ContentType: contentType,
 	}
 
-	return c.SendMedia(ctx, chatID, []MediaPart{media})
+	return c.sendMediaInternal(ctx, chatID, []MediaPart{media})
 }
 
 // detectContentType detects MIME type from file extension or defaults based on media type.

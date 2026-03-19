@@ -42,12 +42,13 @@ type MessagePayload struct {
 
 // MediaPart represents a media attachment with ActiveStorage signed URL.
 type MediaPart struct {
-	Type        string `json:"type"`                   // "image", "audio", "video", "file"
-	URL         string `json:"url"`                    // ActiveStorage signed URL
+	Type        string `json:"type,omitempty"`         // "image", "audio", "video", "file"
+	URL         string `json:"url,omitempty"`          // ActiveStorage signed URL
 	Filename    string `json:"filename,omitempty"`
 	ContentType string `json:"content_type,omitempty"`
 	Size        int64  `json:"size,omitempty"`
 	Caption     string `json:"caption,omitempty"`
+	LocalPath   string `json:"-"`                      // Internal: local file path (not serialized to client)
 }
 
 // ErrorInfo contains error details.

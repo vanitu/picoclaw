@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -198,14 +199,125 @@ func (c *KrabotChannel) SendPlaceholder(ctx context.Context, chatID string) (str
 	return msgID, nil
 }
 
-// SendMedia sends media to clients via signed URLs.
-func (c *KrabotChannel) SendMedia(ctx context.Context, chatID string, media []MediaPart) error {
+// sendMediaInternal sends media to clients via signed URLs.
+// This is the internal method used by the channel itself.
+func (c *KrabotChannel) sendMediaInternal(ctx context.Context, chatID string, media []MediaPart) error {
 	if !c.IsRunning() {
 		return channels.ErrNotRunning
 	}
 
 	outMsg := newMediaMessage(media)
 	return c.broadcastToSession(chatID, outMsg)
+}
+
+// SendMedia implements channels.MediaSender interface.
+// This is called by the channel manager to deliver OutboundMediaMessage from the agent loop.
+func (c *KrabotChannel) SendMedia(ctx context.Context, msg bus.OutboundMediaMessage) error {
+	if !c.IsRunning() {
+		return channels.ErrNotRunning
+	}
+
+	store := c.GetMediaStore()
+	if store == nil {
+		return fmt.Errorf("media store not available")
+	}
+
+	// Convert bus.MediaPart to krabot.MediaPart, resolving media:// refs
+	parts := make([]MediaPart, 0, len(msg.Parts))
+	for _, p := range msg.Parts {
+		part := MediaPart{
+			Type:        p.Type,
+			Filename:    p.Filename,
+			ContentType: p.ContentType,
+		}
+
+		// Resolve media:// refs to local paths
+		if strings.HasPrefix(p.Ref, "media://") {
+			localPath, meta, err := store.ResolveWithMeta(p.Ref)
+			if err != nil {
+				logger.WarnCF("krabot", "Failed to resolve media ref", map[string]any{
+					"ref":   p.Ref,
+					"error": err.Error(),
+				})
+				continue
+			}
+			part.LocalPath = localPath
+			// Use metadata if fields are empty
+			if part.Filename == "" {
+				part.Filename = meta.Filename
+			}
+			if part.ContentType == "" {
+				part.ContentType = meta.ContentType
+			}
+		}
+
+		parts = append(parts, part)
+	}
+
+	if len(parts) == 0 {
+		return fmt.Errorf("no valid media parts to send")
+	}
+
+	// If ActiveStorage is configured, upload files and generate signed URLs
+	if c.config.ActiveStorage.BaseURL != "" {
+		for i, part := range parts {
+			if part.LocalPath != "" && part.URL == "" {
+				client := NewActiveStorageClient(c.config.ActiveStorage)
+				contentType := part.ContentType
+				if contentType == "" {
+					contentType = detectContentType(part.LocalPath, part.Type)
+				}
+				filename := part.Filename
+				if filename == "" {
+					filename = filepath.Base(part.LocalPath)
+				}
+
+				uploadResult, err := client.UploadFile(ctx, part.LocalPath, filename, contentType)
+				if err != nil {
+					logger.ErrorCF("krabot", "Failed to upload to ActiveStorage", map[string]any{
+						"error": err.Error(),
+					})
+					continue
+				}
+
+				signedURL, err := client.GetSignedURL(ctx, uploadResult.SignedID, c.config.ActiveStorage.GetDefaultExpiry())
+				if err != nil {
+					logger.ErrorCF("krabot", "Failed to get signed URL", map[string]any{
+						"error": err.Error(),
+					})
+					continue
+				}
+
+				parts[i].URL = signedURL
+				parts[i].LocalPath = "" // Clear after upload
+			}
+		}
+	}
+
+	// Filter out parts that still don't have a URL (if ActiveStorage not configured,
+	// we might need to handle this differently - for now, skip them)
+	validParts := make([]MediaPart, 0, len(parts))
+	for _, part := range parts {
+		if part.URL != "" || part.LocalPath != "" {
+			// If we have LocalPath but no URL and no ActiveStorage, we can't send it
+			// The client needs a URL to download the file
+			if part.URL == "" && part.LocalPath != "" {
+				logger.WarnCF("krabot", "Skipping media part: no URL and no ActiveStorage configured", map[string]any{
+					"filename": part.Filename,
+				})
+				continue
+			}
+			validParts = append(validParts, part)
+		}
+	}
+
+	if len(validParts) == 0 {
+		return fmt.Errorf("no valid media parts to send after processing")
+	}
+
+	// Use existing method to send to WebSocket clients
+	outMsg := newMediaMessage(validParts)
+	return c.broadcastToSession(msg.ChatID, outMsg)
 }
 
 // broadcastToSession sends a message to all connections in a session.
