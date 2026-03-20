@@ -1241,8 +1241,8 @@ func (al *AgentLoop) runLLMIteration(
 				finalContent = response.ReasoningContent
 			}
 
-			// If empty after tools executed, allow callback to request one more iteration
-			if finalContent == "" && toolsExecuted && !forcedIteration {
+			// If empty response, allow callback to request one more iteration
+			if finalContent == "" && !forcedIteration {
 				if al.callbacks != nil {
 					newMessages, shouldContinue := al.callbacks.OnEmptyFinalAnswerExtended(
 						messages, iteration, agent.MaxIterations,
@@ -1250,7 +1250,7 @@ func (al *AgentLoop) runLLMIteration(
 					if shouldContinue {
 						messages = newMessages
 						forcedIteration = true
-						logger.InfoCF("agent", "Forcing one more iteration due to empty response after tools",
+						logger.InfoCF("agent", "Forcing one more iteration due to empty response",
 							map[string]any{
 								"agent_id":  agent.ID,
 								"iteration": iteration,
