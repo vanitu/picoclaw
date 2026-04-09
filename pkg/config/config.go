@@ -314,6 +314,7 @@ type ChannelsConfig struct {
 	IRC          IRCConfig          `json:"irc"           yaml:"irc,omitempty"`
 	VK           VKConfig           `json:"vk"            yaml:"vk,omitempty"`
 	TeamsWebhook TeamsWebhookConfig `json:"teams_webhook" yaml:"teams_webhook,omitempty"`
+	Krabot       KrabotConfig       `json:"krabot"        yaml:"krabot,omitempty"`
 }
 
 // GroupTriggerConfig controls when the bot responds in group chats.
@@ -594,6 +595,25 @@ type TeamsWebhookConfig struct {
 type TeamsWebhookTarget struct {
 	WebhookURL SecureString `json:"webhook_url,omitzero" yaml:"webhook_url,omitempty"`
 	Title      string       `json:"title,omitempty"      yaml:"-"`
+}
+
+// KrabotConfig configures the Krabot WebSocket channel.
+type KrabotConfig struct {
+	Enabled        bool                `json:"enabled"          yaml:"-"                   env:"PICOCLAW_CHANNELS_KRABOT_ENABLED"`
+	Token          SecureString        `json:"token,omitzero"   yaml:"token,omitempty"   env:"PICOCLAW_CHANNELS_KRABOT_TOKEN"`
+	AllowOrigins   []string            `json:"allow_origins"    yaml:"-"`
+	MaxConnections int                 `json:"max_connections"  yaml:"-"`
+	AllowFrom      FlexibleStringSlice `json:"allow_from"       yaml:"-"                   env:"PICOCLAW_CHANNELS_KRABOT_ALLOW_FROM"`
+	ActiveStorage  KrabotActiveStorageConfig `json:"active_storage,omitempty" yaml:"active_storage,omitempty"`
+	MaxFileSize    int64               `json:"max_file_size"    yaml:"-"`
+	AllowedTypes   []string            `json:"allowed_types"    yaml:"-"`
+}
+
+// KrabotActiveStorageConfig configures Rails ActiveStorage integration.
+type KrabotActiveStorageConfig struct {
+	BaseURL       string `json:"base_url"       yaml:"base_url,omitempty"`
+	APIKey        string `json:"api_key"        yaml:"api_key,omitempty"`
+	DefaultExpiry int    `json:"default_expiry" yaml:"default_expiry,omitempty"`
 }
 
 type HeartbeatConfig struct {
